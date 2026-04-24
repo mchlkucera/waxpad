@@ -1,6 +1,11 @@
 import AppKit
 import Carbon
 
+extension NSAttributedString.Key {
+    static let hiddenSyntax = NSAttributedString.Key("WaxpadHiddenSyntax")
+    static let checkboxMarker = NSAttributedString.Key("WaxpadCheckboxMarker")
+}
+
 // MARK: - Config
 
 let notesDir = FileManager.default.homeDirectoryForCurrentUser
@@ -138,18 +143,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Markdown Styler
 
 class MarkdownStyler {
-    static let bodyFont = NSFont.systemFont(ofSize: 13, weight: .regular)
-    static let bodyMonoFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-    static let boldFont = NSFont.systemFont(ofSize: 13, weight: .bold)
-    static let h1Font = NSFont.systemFont(ofSize: 18, weight: .bold)
-    static let h2Font = NSFont.systemFont(ofSize: 16, weight: .bold)
-    static let h3Font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+    static let bodyFont = NSFont.systemFont(ofSize: 14, weight: .regular)
+    static let bodyMonoFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    static let boldFont = NSFont.systemFont(ofSize: 14, weight: .bold)
+    static let h1Font = NSFont.systemFont(ofSize: 20, weight: .bold)
+    static let h2Font = NSFont.systemFont(ofSize: 17, weight: .bold)
+    static let h3Font = NSFont.systemFont(ofSize: 15, weight: .semibold)
     static let textColor = NSColor.white
     static let dimColor = NSColor(white: 1.0, alpha: 0.35)
-    static let accentColor = NSColor(calibratedRed: 0.4, green: 0.7, blue: 1.0, alpha: 1.0)
-    static let codeColor = NSColor(calibratedRed: 1.0, green: 0.6, blue: 0.4, alpha: 1.0)
+    static let accentColor = NSColor(calibratedRed: 0.302, green: 0.557, blue: 1.0, alpha: 1.0)
+    static let codeColor = accentColor
     static let checkDoneColor = NSColor(white: 1.0, alpha: 0.45)
-    static let codeBgColor = NSColor(white: 1.0, alpha: 0.08)
+    static let codeBgColor = accentColor.withAlphaComponent(0.10)
     static let hrColor = NSColor(white: 1.0, alpha: 0.2)
 
     static let headingPattern = try! NSRegularExpression(pattern: "^(#{1,3})\\s+(.+)$", options: .anchorsMatchLines)
@@ -169,8 +174,8 @@ class MarkdownStyler {
         let fullRange = NSRange(location: 0, length: (text as NSString).length)
 
         let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = 3
-        paragraphStyle.paragraphSpacing = 4
+        paragraphStyle.lineSpacing = 4
+        paragraphStyle.paragraphSpacing = 6
 
         textStorage.setAttributes([
             .font: bodyFont,
@@ -189,6 +194,9 @@ class MarkdownStyler {
             let font = level == 1 ? h1Font : level == 2 ? h2Font : h3Font
             textStorage.addAttribute(.font, value: font, range: textRange)
             textStorage.addAttribute(.foregroundColor, value: dimColor, range: hashRange)
+            // Hide "### " prefix (hashes + trailing space)
+            let prefixRange = NSRange(location: hashRange.location, length: textRange.location - hashRange.location)
+            textStorage.addAttribute(.hiddenSyntax, value: true, range: prefixRange)
         }
 
         // Bold
@@ -199,6 +207,8 @@ class MarkdownStyler {
             let endMarker = NSRange(location: match.range.location + match.range.length - 2, length: 2)
             textStorage.addAttribute(.foregroundColor, value: dimColor, range: startMarker)
             textStorage.addAttribute(.foregroundColor, value: dimColor, range: endMarker)
+            textStorage.addAttribute(.hiddenSyntax, value: true, range: startMarker)
+            textStorage.addAttribute(.hiddenSyntax, value: true, range: endMarker)
         }
 
         // Italic
@@ -212,6 +222,8 @@ class MarkdownStyler {
             let endMarker = NSRange(location: match.range.location + match.range.length - 1, length: 1)
             textStorage.addAttribute(.foregroundColor, value: dimColor, range: startMarker)
             textStorage.addAttribute(.foregroundColor, value: dimColor, range: endMarker)
+            textStorage.addAttribute(.hiddenSyntax, value: true, range: startMarker)
+            textStorage.addAttribute(.hiddenSyntax, value: true, range: endMarker)
         }
 
         // Inline code
@@ -219,18 +231,21 @@ class MarkdownStyler {
             guard let match else { return }
             textStorage.addAttribute(.font, value: bodyMonoFont, range: match.range(at: 1))
             textStorage.addAttribute(.foregroundColor, value: codeColor, range: match.range(at: 1))
-            textStorage.addAttribute(.backgroundColor, value: codeBgColor, range: match.range)
             let startTick = NSRange(location: match.range.location, length: 1)
             let endTick = NSRange(location: match.range.location + match.range.length - 1, length: 1)
             textStorage.addAttribute(.foregroundColor, value: dimColor, range: startTick)
             textStorage.addAttribute(.foregroundColor, value: dimColor, range: endTick)
+            textStorage.addAttribute(.hiddenSyntax, value: true, range: startTick)
+            textStorage.addAttribute(.hiddenSyntax, value: true, range: endTick)
         }
 
         // Unchecked checkboxes
         checkboxUnchecked.enumerateMatches(in: text, range: fullRange) { match, _, _ in
             guard let match else { return }
             textStorage.addAttribute(.foregroundColor, value: dimColor, range: match.range(at: 1))
-            textStorage.addAttribute(.foregroundColor, value: accentColor, range: match.range(at: 2))
+            // Make "[ ]" transparent (not hidden — keep width for checkbox drawing)
+            textStorage.addAttribute(.foregroundColor, value: NSColor.clear, range: match.range(at: 2))
+            textStorage.addAttribute(.checkboxMarker, value: "unchecked", range: match.range(at: 2))
         }
 
         // Checked checkboxes
@@ -238,7 +253,9 @@ class MarkdownStyler {
             guard let match else { return }
             let textRange = match.range(at: 3)
             textStorage.addAttribute(.foregroundColor, value: dimColor, range: match.range(at: 1))
-            textStorage.addAttribute(.foregroundColor, value: accentColor, range: match.range(at: 2))
+            // Make "[x]" transparent (not hidden — keep width for checkbox drawing)
+            textStorage.addAttribute(.foregroundColor, value: NSColor.clear, range: match.range(at: 2))
+            textStorage.addAttribute(.checkboxMarker, value: "checked", range: match.range(at: 2))
             textStorage.addAttribute(.foregroundColor, value: checkDoneColor, range: textRange)
             textStorage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: textRange)
             textStorage.addAttribute(.strikethroughColor, value: checkDoneColor, range: textRange)
@@ -293,6 +310,95 @@ class MarkdownStyler {
             textStorage.addAttribute(.foregroundColor, value: dimColor, range: closeBracketAndUrl)
             let url = ns.substring(with: urlRange)
             textStorage.addAttribute(.link, value: url, range: textRange)
+            // Hide "[" at start and "](url)" at end
+            textStorage.addAttribute(.hiddenSyntax, value: true, range: openBracket)
+            textStorage.addAttribute(.hiddenSyntax, value: true, range: closeBracketAndUrl)
+        }
+    }
+}
+
+// MARK: - Waxpad Layout Manager
+
+class WaxpadLayoutManager: NSLayoutManager {
+    override func setGlyphs(_ glyphs: UnsafePointer<CGGlyph>,
+                            properties props: UnsafePointer<NSLayoutManager.GlyphProperty>,
+                            characterIndexes charIndexes: UnsafePointer<Int>,
+                            font aFont: NSFont,
+                            forGlyphRange glyphRange: NSRange) {
+        var modifiedGlyphs = Array(UnsafeBufferPointer(start: glyphs, count: glyphRange.length))
+        var modifiedProps = Array(UnsafeBufferPointer(start: props, count: glyphRange.length))
+
+        let storage = textStorage
+        for i in 0..<glyphRange.length {
+            let charIndex = charIndexes[i]
+            if charIndex < (storage?.length ?? 0),
+               storage?.attribute(.hiddenSyntax, at: charIndex, effectiveRange: nil) != nil {
+                modifiedGlyphs[i] = CGGlyph.max   // null glyph
+                modifiedProps[i] = .null            // zero width
+            }
+        }
+
+        modifiedGlyphs.withUnsafeBufferPointer { glyphBuf in
+            modifiedProps.withUnsafeBufferPointer { propBuf in
+                super.setGlyphs(glyphBuf.baseAddress!, properties: propBuf.baseAddress!,
+                               characterIndexes: charIndexes, font: aFont,
+                               forGlyphRange: glyphRange)
+            }
+        }
+    }
+
+    // MARK: - Draw visual checkboxes
+
+    override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
+
+        guard let textStorage = self.textStorage,
+              let textContainer = self.textContainers.first else { return }
+
+        let charRange = self.characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+
+        textStorage.enumerateAttribute(.checkboxMarker, in: charRange, options: []) { value, attrRange, _ in
+            guard let state = value as? String else { return }
+            // Only draw checkbox if brackets are invisible (not on cursor line where they're revealed)
+            if let color = textStorage.attribute(.foregroundColor, at: attrRange.location, effectiveRange: nil) as? NSColor,
+               color != NSColor.clear {
+                return
+            }
+
+            let glyphRange = self.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
+            let boundingRect = self.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+
+            let size: CGFloat = 14
+            let x = origin.x + boundingRect.midX - size / 2
+            let y = origin.y + boundingRect.midY - size / 2
+            let rect = NSRect(x: x, y: y, width: size, height: size)
+            let cornerRadius: CGFloat = 3
+
+            let isChecked = (state == "checked")
+
+            if isChecked {
+                let accent = NSColor(calibratedRed: 0.302, green: 0.557, blue: 1.0, alpha: 1.0)
+                accent.setFill()
+                let bg = NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius)
+                bg.fill()
+
+                // Checkmark
+                NSColor.white.setStroke()
+                let check = NSBezierPath()
+                check.move(to: NSPoint(x: rect.minX + 3, y: rect.midY))
+                check.line(to: NSPoint(x: rect.minX + size * 0.4, y: rect.maxY - 3))
+                check.line(to: NSPoint(x: rect.maxX - 3, y: rect.minY + 3))
+                check.lineWidth = 1.5
+                check.lineCapStyle = .round
+                check.lineJoinStyle = .round
+                check.stroke()
+            } else {
+                NSColor(white: 1.0, alpha: 0.4).setStroke()
+                let border = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5),
+                                          xRadius: cornerRadius, yRadius: cornerRadius)
+                border.lineWidth = 1.0
+                border.stroke()
+            }
         }
     }
 }
@@ -301,6 +407,7 @@ class MarkdownStyler {
 
 class StyledEditor: NSTextView {
     var isRestyling = false
+    var previousRevealedLine: NSRange?
 
     override func keyDown(with event: NSEvent) {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -546,9 +653,36 @@ class StyledEditor: NSTextView {
         undoManager?.disableUndoRegistration()
         ts.beginEditing()
         MarkdownStyler.style(ts)
+        // Cursor-line reveal: remove .hiddenSyntax from the current line
+        // and restore checkbox bracket visibility
+        let ns = string as NSString
+        if sel.location <= ns.length {
+            let cursorLine = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+            ts.removeAttribute(.hiddenSyntax, range: cursorLine)
+            ts.removeAttribute(.checkboxMarker, range: cursorLine)
+            // Restore bracket text color on cursor line (was made transparent for checkbox drawing)
+            ts.enumerateAttribute(.checkboxMarker, in: cursorLine, options: []) { _, _, _ in }
+            // Re-color any [ ]/[x] brackets on this line back to visible
+            let lineText = ns.substring(with: cursorLine)
+            if let uncheckedRange = lineText.range(of: "[ ]") {
+                let loc = cursorLine.location + lineText.distance(from: lineText.startIndex, to: uncheckedRange.lowerBound)
+                ts.addAttribute(.foregroundColor, value: MarkdownStyler.accentColor, range: NSRange(location: loc, length: 3))
+            }
+            if let checkedRange = lineText.range(of: "[x]") {
+                let loc = cursorLine.location + lineText.distance(from: lineText.startIndex, to: checkedRange.lowerBound)
+                ts.addAttribute(.foregroundColor, value: MarkdownStyler.accentColor, range: NSRange(location: loc, length: 3))
+            }
+            previousRevealedLine = cursorLine
+        }
         ts.endEditing()
+        // Invalidate all glyphs so hidden syntax takes effect everywhere
+        if let lm = layoutManager {
+            let fullRange = NSRange(location: 0, length: ns.length)
+            lm.invalidateGlyphs(forCharacterRange: fullRange, changeInLength: 0, actualCharacterRange: nil)
+            lm.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
+        }
         undoManager?.enableUndoRegistration()
-        if sel.location <= (string as NSString).length {
+        if sel.location <= ns.length {
             setSelectedRange(sel)
         }
         isRestyling = false
@@ -558,9 +692,10 @@ class StyledEditor: NSTextView {
 // MARK: - Tab Button
 
 class TabButton: NSView {
-    static let activeTextColor = NSColor(white: 1.0, alpha: 0.90)
+    static let accentColor = NSColor(calibratedRed: 0.302, green: 0.557, blue: 1.0, alpha: 1.0)
+    static let activeTextColor = accentColor
     static let inactiveTextColor = NSColor(white: 1.0, alpha: 0.45)
-    static let activeBg = NSColor(white: 1.0, alpha: 0.10)
+    static let activeBg = accentColor.withAlphaComponent(0.12)
     static let hoverBg = NSColor(white: 1.0, alpha: 0.06)
     static let pressedBg = NSColor(white: 1.0, alpha: 0.14)
     static let pillRadius: CGFloat = 6
@@ -707,7 +842,7 @@ class NotesPanel: NSPanel {
     let tabStack = NSStackView()
     let addButton = AddButton()
     let titleField = NSTextField()
-    let editor = StyledEditor()
+    let editor: StyledEditor
     let editorScroll = NSScrollView()
     var currentFile: URL?
     var saveTimer: Timer?
@@ -716,18 +851,35 @@ class NotesPanel: NSPanel {
     var tabButtons: [TabButton] = []
 
     init() {
+        // Assemble custom text system for WYSIWYG markdown hiding
+        let textStorage = NSTextStorage()
+        let layoutManager = WaxpadLayoutManager()
+        let textContainer = NSTextContainer(containerSize: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = true
+        layoutManager.addTextContainer(textContainer)
+        textStorage.addLayoutManager(layoutManager)
+        editor = StyledEditor(frame: .zero, textContainer: textContainer)
+
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
-            styleMask: [.titled, .closable, .resizable, .utilityWindow, .hudWindow],
+            styleMask: [.titled, .resizable, .fullSizeContentView, .utilityWindow, .hudWindow],
             backing: .buffered,
             defer: false
         )
-        self.title = "Waxpad"
+        self.title = ""
+        self.titlebarAppearsTransparent = true
+        self.titleVisibility = .hidden
+        // Hide the standard window buttons (close, minimize, zoom)
+        self.standardWindowButton(.closeButton)?.isHidden = true
+        self.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        self.standardWindowButton(.zoomButton)?.isHidden = true
         self.level = .floating
         self.isFloatingPanel = true
         self.hidesOnDeactivate = false
         self.animationBehavior = .none
         self.isMovableByWindowBackground = true
+        self.backgroundColor = NSColor(calibratedRed: 0.06, green: 0.065, blue: 0.07, alpha: 0.95)
+        self.isOpaque = false
         self.center()
         setupUI()
         loadNotes()
@@ -746,10 +898,12 @@ class NotesPanel: NSPanel {
     func setupUI() {
         guard let content = contentView else { return }
         content.wantsLayer = true
+        content.layer?.backgroundColor = NSColor(calibratedRed: 0.06, green: 0.065, blue: 0.07, alpha: 0.95).cgColor
 
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         tabBar.hasHorizontalScroller = false
         tabBar.hasVerticalScroller = false
+        tabBar.verticalScrollElasticity = .none
         tabBar.drawsBackground = false
         tabBar.borderType = .noBorder
 
@@ -757,7 +911,7 @@ class NotesPanel: NSPanel {
         tabStack.orientation = .horizontal
         tabStack.spacing = 2
         tabStack.alignment = .centerY
-        tabStack.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 4)
+        tabStack.edgeInsets = NSEdgeInsets(top: 0, left: 16, bottom: 0, right: 4)
         tabBar.documentView = tabStack
 
         addButton.translatesAutoresizingMaskIntoConstraints = false
@@ -768,7 +922,7 @@ class NotesPanel: NSPanel {
         tabRow.orientation = .horizontal
         tabRow.spacing = 4
         tabRow.alignment = .centerY
-        tabRow.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: 6, right: 8)
+        tabRow.edgeInsets = NSEdgeInsets(top: 10, left: 4, bottom: 6, right: 12)
 
         titleField.translatesAutoresizingMaskIntoConstraints = false
         titleField.isEditable = true
@@ -801,14 +955,14 @@ class NotesPanel: NSPanel {
         editor.autoresizingMask = [.width]
         editor.textContainer?.containerSize = NSSize(width: 0, height: .max)
         editor.textContainer?.widthTracksTextView = true
-        editor.textContainerInset = NSSize(width: 12, height: 8)
+        editor.textContainerInset = NSSize(width: 16, height: 12)
         editor.isRichText = true
         editor.isAutomaticQuoteSubstitutionEnabled = false
         editor.isAutomaticDashSubstitutionEnabled = false
         editor.isAutomaticTextReplacementEnabled = false
         editor.isAutomaticSpellingCorrectionEnabled = false
         editor.isAutomaticLinkDetectionEnabled = false
-        editor.insertionPointColor = .white
+        editor.insertionPointColor = NSColor(calibratedRed: 0.302, green: 0.557, blue: 1.0, alpha: 1.0)
         editor.drawsBackground = false
         editor.allowsUndo = true
         editor.delegate = self
@@ -823,20 +977,20 @@ class NotesPanel: NSPanel {
         content.addSubview(editorScroll)
 
         NSLayoutConstraint.activate([
-            tabRow.topAnchor.constraint(equalTo: content.topAnchor, constant: 4),
+            tabRow.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
             tabRow.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             tabRow.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            tabRow.heightAnchor.constraint(equalToConstant: 34),
+            tabRow.heightAnchor.constraint(equalToConstant: 38),
 
             titleField.topAnchor.constraint(equalTo: tabRow.bottomAnchor, constant: 8),
-            titleField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
-            titleField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            titleField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            titleField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
 
             sep.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 8),
-            sep.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            sep.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            sep.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            sep.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
 
-            editorScroll.topAnchor.constraint(equalTo: sep.bottomAnchor, constant: 4),
+            editorScroll.topAnchor.constraint(equalTo: sep.bottomAnchor, constant: 8),
             editorScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             editorScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             editorScroll.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -1053,6 +1207,20 @@ extension NotesPanel: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         guard !editor.isRestyling else { return }
         scheduleSave()
+        editor.restyleMarkdown()
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        guard !editor.isRestyling else { return }
+        let ns = editor.string as NSString
+        guard ns.length > 0 else { return }
+        let sel = editor.selectedRange()
+        guard sel.location <= ns.length else { return }
+        let currentLine = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+        // Only restyle if the cursor moved to a different line
+        if let prev = editor.previousRevealedLine, NSEqualRanges(prev, currentLine) {
+            return
+        }
         editor.restyleMarkdown()
     }
 }
