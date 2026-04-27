@@ -303,6 +303,8 @@ class StyledEditor: NSTextView {
         case ([.command, .option], _, "1"): toggleLinePrefix("# "); return
         case ([.command, .option], _, "2"): toggleLinePrefix("## "); return
         case ([.command, .option], _, "3"): toggleLinePrefix("### "); return
+        case ([.command, .shift], 26, _):   toggleLinePrefix("1. "); return
+        case ([.command, .shift], 28, _):   toggleLinePrefix("- "); return
         case ([.command, .shift], 25, _):   toggleCheckbox(); return
         case ([.command, .shift], 33, _):   notesPanel?.switchTab(delta: -1); return
         case ([.command, .shift], 30, _):   notesPanel?.switchTab(delta: 1); return
@@ -383,8 +385,14 @@ class StyledEditor: NSTextView {
             newLine = indent + "- [ ] " + (content.hasPrefix("- ") || content.hasPrefix("* ")
                 ? String(content.dropFirst(2)) : content) + "\n"
         }
+        let hasNewline = newLine.hasSuffix("\n")
+        let cursorPos = lineRange.location + newLine.count - (hasNewline ? 1 : 0)
         replaceText(in: lineRange, with: newLine,
-                     cursorAt: min(lineRange.location + newLine.count - 1, (string as NSString).length))
+                     cursorAt: min(cursorPos, (string as NSString).length))
+        let finalPos = min(cursorPos, (string as NSString).length)
+        DispatchQueue.main.async { [weak self] in
+            self?.setSelectedRange(NSRange(location: finalPos, length: 0))
+        }
     }
 
     func toggleLinePrefix(_ prefix: String) {
@@ -399,6 +407,11 @@ class StyledEditor: NSTextView {
         let cursorPos = lineRange.location + newLine.count - (hasNewline ? 1 : 0)
         replaceText(in: lineRange, with: newLine,
                      cursorAt: min(cursorPos, (string as NSString).length))
+        // Force cursor after all delegate callbacks settle
+        let finalPos = min(cursorPos, (string as NSString).length)
+        DispatchQueue.main.async { [weak self] in
+            self?.setSelectedRange(NSRange(location: finalPos, length: 0))
+        }
     }
 
     func handleListContinuation() -> Bool {
