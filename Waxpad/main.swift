@@ -551,6 +551,7 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
     var tabButtons: [TabButton] = []
     private var saveTimer: Timer?
     private var fileWatcher: DispatchSourceFileSystemObject?
+    private var dirWatcher: DispatchSourceFileSystemObject?
     private var emptyStateView: NSView?
     private var editorScroll: NSScrollView?
     private var addBtnLabel: NSTextField?
@@ -587,6 +588,7 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
         center()
         setupUI()
         loadNotes()
+        watchDirectory()
 
         for n in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
             NotificationCenter.default.addObserver(forName: n, object: self, queue: nil) { _ in
@@ -913,6 +915,24 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
         source.setCancelHandler { Darwin.close(fd) }
         source.resume()
         fileWatcher = source
+    }
+
+    func watchDirectory() {
+        dirWatcher?.cancel()
+        let fd = open(notesDir.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write], queue: .main)
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            let prev = Set(self.notes.map(\.lastPathComponent))
+            let current = Set(((try? FileManager.default.contentsOfDirectory(at: notesDir, includingPropertiesForKeys: nil))?
+                .filter { $0.pathExtension == "md" }
+                .map(\.lastPathComponent)) ?? [])
+            if prev != current { self.loadNotes() }
+        }
+        source.setCancelHandler { Darwin.close(fd) }
+        source.resume()
+        dirWatcher = source
     }
 
     // MARK: - NSTextViewDelegate
