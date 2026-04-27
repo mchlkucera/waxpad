@@ -9,7 +9,7 @@ Waxpad — a floating markdown notepad for macOS. Local .md files, no cloud, no 
 - Floating HUD window — always on top, stays out of your way
 - Markdown live styling (headings, bold, italic, code, links, lists)
 - Global hotkey: **Option+N** to toggle the window
-- Auto-save to `~/.quick-notes/`
+- Auto-save to `~/.waxpad-notes/`
 - File watcher picks up external edits instantly
 - Tabs for multiple notes
 - Checkboxes with **Cmd+Enter**
@@ -64,7 +64,7 @@ Or build a proper .app bundle (no Dock icon, drag to /Applications):
 
 ## Why
 
-Raycast Notes was great until it wasn't — your notes are locked inside Raycast with no export and no local files. Waxpad stores plain `.md` files in `~/.quick-notes/` so you own your data and can open them with any editor.
+Raycast Notes was great until it wasn't — your notes are locked inside Raycast with no export and no local files. Waxpad stores plain `.md` files in `~/.waxpad-notes/` so you own your data and can open them with any editor.
 
 ## License
 
