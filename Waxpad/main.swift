@@ -190,10 +190,19 @@ struct MarkdownStyler {
             }
         }
 
+        // Checkbox indent
+        let checkPrefixWidth = ("- [ ] " as NSString).size(withAttributes: [.font: bodyFont]).width
+        let cbSpaceWidth = (" " as NSString).size(withAttributes: [.font: bodyFont]).width
+
         // Unchecked checkboxes — just dim the prefix
         unchecked.enumerateMatches(in: text, range: full) { m, _, _ in
             guard let m else { return }
             ts.addAttribute(.foregroundColor, value: dimColor, range: m.range(at: 2))
+            let lineRange = ns.lineRange(for: m.range)
+            let indent = CGFloat(m.range(at: 1).length) * cbSpaceWidth + checkPrefixWidth
+            let cp = NSMutableParagraphStyle()
+            cp.paragraphSpacing = 6; cp.headIndent = indent
+            ts.addAttribute(.paragraphStyle, value: cp, range: lineRange)
         }
 
         // Checked checkboxes — dim prefix, strikethrough text
@@ -203,18 +212,26 @@ struct MarkdownStyler {
             ts.addAttribute(.foregroundColor, value: checkDoneColor, range: m.range(at: 3))
             ts.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: m.range(at: 3))
             ts.addAttribute(.strikethroughColor, value: checkDoneColor, range: m.range(at: 3))
+            let lineRange = ns.lineRange(for: m.range)
+            let indent = CGFloat(m.range(at: 1).length) * cbSpaceWidth + checkPrefixWidth
+            let cp = NSMutableParagraphStyle()
+            cp.paragraphSpacing = 6; cp.headIndent = indent
+            ts.addAttribute(.paragraphStyle, value: cp, range: lineRange)
         }
 
         // Bullets (skip checkbox lines)
+        let prefixWidth = ("- " as NSString).size(withAttributes: [.font: bodyFont]).width
+        let spaceWidth = (" " as NSString).size(withAttributes: [.font: bodyFont]).width
         bullet.enumerateMatches(in: text, range: full) { m, _, _ in
             guard let m else { return }
             let lineRange = ns.lineRange(for: m.range)
             let line = ns.substring(with: lineRange)
             if line.contains("[ ]") || line.contains("[x]") { return }
             ts.addAttribute(.foregroundColor, value: dimColor, range: m.range(at: 2))
-            let indentPx = CGFloat(m.range(at: 1).length) * 8 + 16
+            let indent = CGFloat(m.range(at: 1).length) * spaceWidth + prefixWidth
             let bp = NSMutableParagraphStyle()
-            bp.paragraphSpacing = 6; bp.headIndent = indentPx
+            bp.paragraphSpacing = 6
+            bp.headIndent = indent
             ts.addAttribute(.paragraphStyle, value: bp, range: lineRange)
         }
 
@@ -222,13 +239,21 @@ struct MarkdownStyler {
         numbered.enumerateMatches(in: text, range: full) { m, _, _ in
             guard let m else { return }
             ts.addAttribute(.foregroundColor, value: dimColor, range: m.range(at: 2))
+            let lineRange = ns.lineRange(for: m.range)
+            let numStr = ns.substring(with: m.range(at: 2)) + " "
+            let numWidth = (numStr as NSString).size(withAttributes: [.font: bodyFont]).width
+            let indent = CGFloat(m.range(at: 1).length) * spaceWidth + numWidth
+            let np = NSMutableParagraphStyle()
+            np.paragraphSpacing = 6; np.headIndent = indent
+            ts.addAttribute(.paragraphStyle, value: np, range: lineRange)
         }
 
         // Blockquotes
+        let bqWidth = ("> " as NSString).size(withAttributes: [.font: bodyFont]).width
         blockquote.enumerateMatches(in: text, range: full) { m, _, _ in
             guard let m else { return }
             let qp = NSMutableParagraphStyle()
-            qp.headIndent = 18; qp.firstLineHeadIndent = 18; qp.lineSpacing = 2
+            qp.headIndent = bqWidth; qp.firstLineHeadIndent = 0; qp.lineSpacing = 2
             ts.addAttributes([.paragraphStyle: qp, .foregroundColor: NSColor(white: 1.0, alpha: 0.6)], range: m.range)
             ts.addAttribute(.foregroundColor, value: accentColor, range: NSRange(location: m.range.location, length: 1))
         }
@@ -551,9 +576,6 @@ class TabButton: NSView {
     }
 }
 
-// MARK: - Empty State Button
-
-
 // MARK: - Notes Panel
 
 class NotesPanel: NSPanel, NSTextViewDelegate {
@@ -564,6 +586,7 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
     var tabButtons: [TabButton] = []
     private var saveTimer: Timer?
     private var fileWatcher: DispatchSourceFileSystemObject?
+    private var isExternalReload = false
     private var dirWatcher: DispatchSourceFileSystemObject?
     private var emptyStateView: NSView?
     private var editorScroll: NSScrollView?
@@ -799,7 +822,7 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
             tab.onDoubleClick = { [weak self] in self?.renameNote(at: i) }
             let menu = NSMenu()
             let del = NSMenuItem(title: "Delete Note", action: #selector(deleteNote(_:)), keyEquivalent: "")
-            del.tag = i; del.target = self; menu.addItem(del)
+            del.representedObject = url; del.target = self; menu.addItem(del)
             tab.menu = menu
             tabStack.addArrangedSubview(tab)
             tabButtons.append(tab)
@@ -887,17 +910,16 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
     }
 
     @objc func deleteNote(_ sender: NSMenuItem) {
-        let idx = sender.tag
-        guard idx >= 0, idx < notes.count else { return }
+        guard let url = sender.representedObject as? URL else { return }
         let alert = NSAlert()
-        alert.messageText = "Delete \"\(notes[idx].deletingPathExtension().lastPathComponent)\"?"
+        alert.messageText = "Delete \"\(url.deletingPathExtension().lastPathComponent)\"?"
         alert.informativeText = "This cannot be undone."
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        try? FileManager.default.removeItem(at: notes[idx])
-        if currentFile == notes[idx] { currentFile = nil; editor.string = "" }
+        try? FileManager.default.removeItem(at: url)
+        if currentFile == url { currentFile = nil; editor.string = "" }
         loadNotes()
     }
 
@@ -921,9 +943,11 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
             guard let content = try? String(contentsOf: file, encoding: .utf8),
                   content != self.editor.string else { return }
             let sel = self.editor.selectedRange()
+            self.isExternalReload = true
             self.editor.string = content
             self.editor.restyleMarkdown()
-            if sel.location <= content.count { self.editor.setSelectedRange(sel) }
+            if sel.location <= (content as NSString).length { self.editor.setSelectedRange(sel) }
+            self.isExternalReload = false
         }
         source.setCancelHandler { Darwin.close(fd) }
         source.resume()
@@ -952,7 +976,7 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
 
     func textDidChange(_ notification: Notification) {
         guard !editor.isRestyling else { return }
-        scheduleSave()
+        if !isExternalReload { scheduleSave() }
         editor.restyleMarkdown()
     }
 
