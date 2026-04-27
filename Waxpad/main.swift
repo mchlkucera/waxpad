@@ -391,11 +391,14 @@ class StyledEditor: NSTextView {
         let text = string as NSString
         let lineRange = text.lineRange(for: NSRange(location: selectedRange().location, length: 0))
         let line = text.substring(with: lineRange)
-        let newLine = line.hasPrefix(prefix)
+        let removing = line.hasPrefix(prefix)
+        let newLine = removing
             ? String(line.dropFirst(prefix.count))
             : prefix + line.replacingOccurrences(of: "^#{1,3}\\s+", with: "", options: .regularExpression)
+        let hasNewline = newLine.hasSuffix("\n")
+        let cursorPos = lineRange.location + newLine.count - (hasNewline ? 1 : 0)
         replaceText(in: lineRange, with: newLine,
-                     cursorAt: min(lineRange.location + newLine.count - 1, (string as NSString).length))
+                     cursorAt: min(cursorPos, (string as NSString).length))
     }
 
     func handleListContinuation() -> Bool {
