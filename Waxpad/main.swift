@@ -342,8 +342,8 @@ class StyledEditor: NSTextView {
     private func replaceText(in range: NSRange, with str: String, cursorAt pos: Int) {
         if shouldChangeText(in: range, replacementString: str) {
             textStorage?.replaceCharacters(in: range, with: str)
-            didChangeText()
             setSelectedRange(NSRange(location: pos, length: 0))
+            didChangeText()
         }
     }
 
