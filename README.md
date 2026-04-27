@@ -66,6 +66,10 @@ Or build a proper .app bundle (no Dock icon, drag to /Applications):
 
 Raycast Notes was great until it wasn't — your notes are locked inside Raycast with no export and no local files. Waxpad stores plain `.md` files in `~/.waxpad-notes/` so you own your data and can open them with any editor.
 
+## Built by AI
+
+Waxpad was 100% vibecoded with Claude Code. No human wrote a line of Swift. It's a single-file app, ad-hoc signed, with no formal security audit. It needs Accessibility permissions for the global hotkey and reads/writes only to `~/.waxpad-notes/`. The entire source is right here — read it, fork it, judge it.
+
 ## License
 
 MIT
