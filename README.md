@@ -19,6 +19,15 @@ Waxpad — a floating markdown notepad for macOS. Local .md files, no cloud, no 
 
 ## Install
 
+### Homebrew (recommended)
+
+```bash
+brew tap mchlkucera/tap
+brew install waxpad
+```
+
+### From source
+
 ```bash
 # Build release binary
 swift build -c release

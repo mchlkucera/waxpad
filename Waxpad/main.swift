@@ -3,18 +3,12 @@ import Carbon
 
 extension NSAttributedString.Key {
     static let hiddenSyntax = NSAttributedString.Key("WaxpadHiddenSyntax")
-    static let checkboxMarker = NSAttributedString.Key("WaxpadCheckboxMarker")
 }
 
 // MARK: - Config
 
 let notesDir = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent(".quick-notes")
-// Global hotkey: Option+N
-let hotKeyCombo: (keyCode: UInt32, modifiers: UInt32) = (
-    UInt32(kVK_ANSI_N),
-    UInt32(optionKey)
-)
+    .appendingPathComponent(".waxpad-notes")
 
 // MARK: - App Entry
 
@@ -23,7 +17,6 @@ let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 
-// Main menu for standard key equivalents
 let mainMenu = NSMenu()
 let editMenuItem = NSMenuItem()
 editMenuItem.submenu = {
@@ -39,7 +32,6 @@ editMenuItem.submenu = {
 }()
 mainMenu.addItem(editMenuItem)
 app.mainMenu = mainMenu
-
 app.run()
 
 // MARK: - AppDelegate
@@ -50,41 +42,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var hotKeyRef: EventHotKeyRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        ensureNotesDir()
-        setupMenuBar()
-        setupPanel()
-        registerHotKey()
-    }
-
-    func ensureNotesDir() {
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: notesDir.path) {
-            try? fm.createDirectory(at: notesDir, withIntermediateDirectories: true)
-            let welcome = notesDir.appendingPathComponent("scratch.md")
-            try? "# Scratch\n\nStart typing here...\n- [ ] First task\n- [x] Done task".write(
-                to: welcome, atomically: true, encoding: .utf8)
+        if !FileManager.default.fileExists(atPath: notesDir.path) {
+            try? FileManager.default.createDirectory(at: notesDir, withIntermediateDirectories: true)
         }
-    }
 
-    func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let btn = statusItem.button {
             btn.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Waxpad")
             btn.action = #selector(togglePanel)
             btn.target = self
         }
-    }
 
-    func setupPanel() {
         panel = NotesPanel()
         restoreWindowFrame()
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        registerHotKey()
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        saveWindowFrame()
-    }
+    func applicationWillTerminate(_ notification: Notification) { saveWindowFrame() }
 
     @objc func togglePanel() {
         if panel.isVisible {
@@ -98,43 +74,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func saveWindowFrame() {
-        let frame = panel.frame
-        UserDefaults.standard.set(NSStringFromRect(frame), forKey: "WaxpadWindowFrame")
+        UserDefaults.standard.set(NSStringFromRect(panel.frame), forKey: "WaxpadWindowFrame")
     }
 
     func restoreWindowFrame() {
-        if let frameStr = UserDefaults.standard.string(forKey: "WaxpadWindowFrame") {
-            let frame = NSRectFromString(frameStr)
-            // Verify the saved position is still on a visible screen
-            if NSScreen.screens.contains(where: { $0.frame.intersects(frame) }) {
-                panel.setFrame(frame, display: false)
+        if let s = UserDefaults.standard.string(forKey: "WaxpadWindowFrame") {
+            let f = NSRectFromString(s)
+            if NSScreen.screens.contains(where: { $0.frame.intersects(f) }) {
+                panel.setFrame(f, display: false)
                 return
             }
         }
-        // Fallback: center on active screen
-        if let activeScreen = NSScreen.screens.first(where: {
-            NSMouseInRect(NSEvent.mouseLocation, $0.frame, false)
-        }) {
-            let panelSize = panel.frame.size
-            let screenFrame = activeScreen.visibleFrame
-            let x = screenFrame.midX - panelSize.width / 2
-            let y = screenFrame.midY - panelSize.height / 2
-            panel.setFrameOrigin(NSPoint(x: x, y: y))
+        if let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) {
+            let sf = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(x: sf.midX - panel.frame.width / 2, y: sf.midY - panel.frame.height / 2))
         }
     }
 
     func registerHotKey() {
         let id = EventHotKeyID(signature: OSType(0x514E), id: 1)
         var ref: EventHotKeyRef?
-        RegisterEventHotKey(hotKeyCombo.keyCode, hotKeyCombo.modifiers, id,
+        RegisterEventHotKey(UInt32(kVK_ANSI_N), UInt32(optionKey), id,
                             GetApplicationEventTarget(), 0, &ref)
         hotKeyRef = ref
-
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                        eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
-            guard let delegate = NSApp.delegate as? AppDelegate else { return noErr }
-            delegate.togglePanel()
+        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ -> OSStatus in
+            (NSApp.delegate as? AppDelegate)?.togglePanel()
             return noErr
         }, 1, &eventType, nil, nil)
     }
@@ -142,549 +108,370 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - Markdown Styler
 
-class MarkdownStyler {
-    static let bodyFont = NSFont.systemFont(ofSize: 14, weight: .regular)
-    static let bodyMonoFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    static let boldFont = NSFont.systemFont(ofSize: 14, weight: .bold)
-    static let h1Font = NSFont.systemFont(ofSize: 20, weight: .bold)
-    static let h2Font = NSFont.systemFont(ofSize: 17, weight: .bold)
-    static let h3Font = NSFont.systemFont(ofSize: 15, weight: .semibold)
-    static let textColor = NSColor.white
-    static let dimColor = NSColor(white: 1.0, alpha: 0.35)
-    static let accentColor = NSColor(calibratedRed: 0.302, green: 0.557, blue: 1.0, alpha: 1.0)
-    static let codeColor = accentColor
-    static let checkDoneColor = NSColor(white: 1.0, alpha: 0.45)
-    static let codeBgColor = accentColor.withAlphaComponent(0.10)
-    static let hrColor = NSColor(white: 1.0, alpha: 0.2)
+struct MarkdownStyler {
+    static let bodyFont = NSFont.systemFont(ofSize: 15, weight: .regular)
+    static let boldFont = NSFont.systemFont(ofSize: 15, weight: .bold)
+    static let monoFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+    static let h1Font = NSFont.systemFont(ofSize: 22, weight: .bold)
+    static let h2Font = NSFont.systemFont(ofSize: 18, weight: .bold)
+    static let h3Font = NSFont.systemFont(ofSize: 16, weight: .semibold)
+    static let textColor = NSColor(white: 0.93, alpha: 1.0)
+    static let dimColor = NSColor(white: 1.0, alpha: 0.28)
+    static let accentColor = NSColor(calibratedRed: 0.35, green: 0.55, blue: 0.95, alpha: 1.0)
+    static let checkDoneColor = NSColor(white: 1.0, alpha: 0.38)
 
-    static let headingPattern = try! NSRegularExpression(pattern: "^(#{1,3})\\s+(.+)$", options: .anchorsMatchLines)
-    static let boldPattern = try! NSRegularExpression(pattern: "\\*\\*(.+?)\\*\\*", options: [])
-    static let italicPattern = try! NSRegularExpression(pattern: "(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)", options: [])
-    static let inlineCodePattern = try! NSRegularExpression(pattern: "`([^`]+)`", options: [])
-    static let checkboxUnchecked = try! NSRegularExpression(pattern: "^(\\s*- )(\\[ \\])(.*)$", options: .anchorsMatchLines)
-    static let checkboxChecked = try! NSRegularExpression(pattern: "^(\\s*- )(\\[x\\])(.*)$", options: .anchorsMatchLines)
-    static let bulletPattern = try! NSRegularExpression(pattern: "^(\\s*)([-*])\\s", options: .anchorsMatchLines)
-    static let blockQuotePattern = try! NSRegularExpression(pattern: "^>\\s?(.*)$", options: .anchorsMatchLines)
-    static let linkPattern = try! NSRegularExpression(pattern: "\\[([^\\]]+)\\]\\(([^)]+)\\)", options: [])
-    static let hrPattern = try! NSRegularExpression(pattern: "^-{3,}$", options: .anchorsMatchLines)
-    static let numberedListPattern = try! NSRegularExpression(pattern: "^(\\s*)(\\d+\\.)\\s", options: .anchorsMatchLines)
+    private static let heading = try! NSRegularExpression(pattern: "^(#{1,3})\\s+(.+)$", options: .anchorsMatchLines)
+    private static let bold = try! NSRegularExpression(pattern: "\\*\\*(.+?)\\*\\*", options: [])
+    private static let italic = try! NSRegularExpression(pattern: "(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)", options: [])
+    private static let inlineCode = try! NSRegularExpression(pattern: "`([^`]+)`", options: [])
+    private static let unchecked = try! NSRegularExpression(pattern: "^(\\s*)(- \\[ \\])(.*)$", options: .anchorsMatchLines)
+    private static let checked = try! NSRegularExpression(pattern: "^(\\s*)(- \\[x\\])(.*)$", options: .anchorsMatchLines)
+    private static let bullet = try! NSRegularExpression(pattern: "^(\\s*)([-*])\\s", options: .anchorsMatchLines)
+    private static let numbered = try! NSRegularExpression(pattern: "^(\\s*)(\\d+\\.)\\s", options: .anchorsMatchLines)
+    private static let blockquote = try! NSRegularExpression(pattern: "^>\\s?(.*)$", options: .anchorsMatchLines)
+    private static let link = try! NSRegularExpression(pattern: "\\[([^\\]]+)\\]\\(([^)]+)\\)", options: [])
+    private static let hr = try! NSRegularExpression(pattern: "^-{3,}$", options: .anchorsMatchLines)
 
-    static func style(_ textStorage: NSTextStorage) {
-        let text = textStorage.string
-        let fullRange = NSRange(location: 0, length: (text as NSString).length)
-
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = 4
-        paragraphStyle.paragraphSpacing = 6
-
-        textStorage.setAttributes([
-            .font: bodyFont,
-            .foregroundColor: textColor,
-            .paragraphStyle: paragraphStyle,
-        ], range: fullRange)
-
+    static func style(_ ts: NSTextStorage) {
+        let text = ts.string
+        let full = NSRange(location: 0, length: (text as NSString).length)
         let ns = text as NSString
 
-        // Headings
-        headingPattern.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            let hashRange = match.range(at: 1)
-            let textRange = match.range(at: 2)
-            let level = hashRange.length
+        let para = NSMutableParagraphStyle()
+        para.lineSpacing = 0
+        para.paragraphSpacing = 6
+
+        ts.setAttributes([.font: bodyFont, .foregroundColor: textColor, .paragraphStyle: para], range: full)
+
+        // Headings — dim the ## prefix, never hide it (hiding causes layout jumps)
+        heading.enumerateMatches(in: text, range: full) { m, _, _ in
+            guard let m else { return }
+            let level = m.range(at: 1).length
             let font = level == 1 ? h1Font : level == 2 ? h2Font : h3Font
-            textStorage.addAttribute(.font, value: font, range: textRange)
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: hashRange)
-            // Hide "### " prefix (hashes + trailing space)
-            let prefixRange = NSRange(location: hashRange.location, length: textRange.location - hashRange.location)
-            textStorage.addAttribute(.hiddenSyntax, value: true, range: prefixRange)
+            ts.addAttribute(.font, value: font, range: m.range)
+            ts.addAttribute(.foregroundColor, value: dimColor, range: m.range(at: 1))
+            let hp = NSMutableParagraphStyle()
+            hp.lineSpacing = 2; hp.paragraphSpacingBefore = 12; hp.paragraphSpacing = 4
+            ts.addAttribute(.paragraphStyle, value: hp, range: m.range)
         }
 
         // Bold
-        boldPattern.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            textStorage.addAttribute(.font, value: boldFont, range: match.range(at: 1))
-            let startMarker = NSRange(location: match.range.location, length: 2)
-            let endMarker = NSRange(location: match.range.location + match.range.length - 2, length: 2)
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: startMarker)
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: endMarker)
-            textStorage.addAttribute(.hiddenSyntax, value: true, range: startMarker)
-            textStorage.addAttribute(.hiddenSyntax, value: true, range: endMarker)
+        bold.enumerateMatches(in: text, range: full) { m, _, _ in
+            guard let m else { return }
+            ts.addAttribute(.font, value: boldFont, range: m.range(at: 1))
+            for r in [NSRange(location: m.range.location, length: 2),
+                       NSRange(location: m.range.location + m.range.length - 2, length: 2)] {
+                ts.addAttribute(.foregroundColor, value: dimColor, range: r)
+                ts.addAttribute(.hiddenSyntax, value: true, range: r)
+            }
         }
 
         // Italic
-        italicPattern.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            let innerRange = match.range(at: 1)
-            let italicDesc = bodyFont.fontDescriptor.withSymbolicTraits(.italic)
-            let italic = NSFont(descriptor: italicDesc, size: bodyFont.pointSize) ?? bodyFont
-            textStorage.addAttribute(.font, value: italic, range: innerRange)
-            let startMarker = NSRange(location: match.range.location, length: 1)
-            let endMarker = NSRange(location: match.range.location + match.range.length - 1, length: 1)
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: startMarker)
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: endMarker)
-            textStorage.addAttribute(.hiddenSyntax, value: true, range: startMarker)
-            textStorage.addAttribute(.hiddenSyntax, value: true, range: endMarker)
+        italic.enumerateMatches(in: text, range: full) { m, _, _ in
+            guard let m else { return }
+            let desc = bodyFont.fontDescriptor.withSymbolicTraits(.italic)
+            ts.addAttribute(.font, value: NSFont(descriptor: desc, size: bodyFont.pointSize) ?? bodyFont, range: m.range(at: 1))
+            for r in [NSRange(location: m.range.location, length: 1),
+                       NSRange(location: m.range.location + m.range.length - 1, length: 1)] {
+                ts.addAttribute(.foregroundColor, value: dimColor, range: r)
+                ts.addAttribute(.hiddenSyntax, value: true, range: r)
+            }
         }
 
         // Inline code
-        inlineCodePattern.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            textStorage.addAttribute(.font, value: bodyMonoFont, range: match.range(at: 1))
-            textStorage.addAttribute(.foregroundColor, value: codeColor, range: match.range(at: 1))
-            let startTick = NSRange(location: match.range.location, length: 1)
-            let endTick = NSRange(location: match.range.location + match.range.length - 1, length: 1)
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: startTick)
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: endTick)
-            textStorage.addAttribute(.hiddenSyntax, value: true, range: startTick)
-            textStorage.addAttribute(.hiddenSyntax, value: true, range: endTick)
+        inlineCode.enumerateMatches(in: text, range: full) { m, _, _ in
+            guard let m else { return }
+            ts.addAttribute(.font, value: monoFont, range: m.range(at: 1))
+            ts.addAttribute(.foregroundColor, value: accentColor, range: m.range(at: 1))
+            for r in [NSRange(location: m.range.location, length: 1),
+                       NSRange(location: m.range.location + m.range.length - 1, length: 1)] {
+                ts.addAttribute(.foregroundColor, value: dimColor, range: r)
+                ts.addAttribute(.hiddenSyntax, value: true, range: r)
+            }
         }
 
-        // Unchecked checkboxes
-        checkboxUnchecked.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: match.range(at: 1))
-            // Make "[ ]" transparent (not hidden — keep width for checkbox drawing)
-            textStorage.addAttribute(.foregroundColor, value: NSColor.clear, range: match.range(at: 2))
-            textStorage.addAttribute(.checkboxMarker, value: "unchecked", range: match.range(at: 2))
+        // Unchecked checkboxes — just dim the prefix
+        unchecked.enumerateMatches(in: text, range: full) { m, _, _ in
+            guard let m else { return }
+            ts.addAttribute(.foregroundColor, value: dimColor, range: m.range(at: 2))
         }
 
-        // Checked checkboxes
-        checkboxChecked.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            let textRange = match.range(at: 3)
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: match.range(at: 1))
-            // Make "[x]" transparent (not hidden — keep width for checkbox drawing)
-            textStorage.addAttribute(.foregroundColor, value: NSColor.clear, range: match.range(at: 2))
-            textStorage.addAttribute(.checkboxMarker, value: "checked", range: match.range(at: 2))
-            textStorage.addAttribute(.foregroundColor, value: checkDoneColor, range: textRange)
-            textStorage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: textRange)
-            textStorage.addAttribute(.strikethroughColor, value: checkDoneColor, range: textRange)
+        // Checked checkboxes — dim prefix, strikethrough text
+        checked.enumerateMatches(in: text, range: full) { m, _, _ in
+            guard let m else { return }
+            ts.addAttribute(.foregroundColor, value: dimColor, range: m.range(at: 2))
+            ts.addAttribute(.foregroundColor, value: checkDoneColor, range: m.range(at: 3))
+            ts.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: m.range(at: 3))
+            ts.addAttribute(.strikethroughColor, value: checkDoneColor, range: m.range(at: 3))
         }
 
-        // Bullet points
-        bulletPattern.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: match.range(at: 2))
+        // Bullets (skip checkbox lines)
+        bullet.enumerateMatches(in: text, range: full) { m, _, _ in
+            guard let m else { return }
+            let lineRange = ns.lineRange(for: m.range)
+            let line = ns.substring(with: lineRange)
+            if line.contains("[ ]") || line.contains("[x]") { return }
+            ts.addAttribute(.foregroundColor, value: dimColor, range: m.range(at: 2))
+            let indentPx = CGFloat(m.range(at: 1).length) * 8 + 16
+            let bp = NSMutableParagraphStyle()
+            bp.paragraphSpacing = 6; bp.headIndent = indentPx
+            ts.addAttribute(.paragraphStyle, value: bp, range: lineRange)
         }
 
         // Numbered lists
-        numberedListPattern.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: match.range(at: 2))
+        numbered.enumerateMatches(in: text, range: full) { m, _, _ in
+            guard let m else { return }
+            ts.addAttribute(.foregroundColor, value: dimColor, range: m.range(at: 2))
         }
 
-        // Block quotes
-        blockQuotePattern.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            let quoteStyle = NSMutableParagraphStyle()
-            quoteStyle.headIndent = 16
-            quoteStyle.firstLineHeadIndent = 16
-            quoteStyle.lineSpacing = 3
-            textStorage.addAttributes([
-                .paragraphStyle: quoteStyle,
-                .foregroundColor: NSColor(white: 1.0, alpha: 0.6),
-            ], range: match.range)
-            let marker = NSRange(location: match.range.location, length: 1)
-            textStorage.addAttribute(.foregroundColor, value: accentColor, range: marker)
+        // Blockquotes
+        blockquote.enumerateMatches(in: text, range: full) { m, _, _ in
+            guard let m else { return }
+            let qp = NSMutableParagraphStyle()
+            qp.headIndent = 18; qp.firstLineHeadIndent = 18; qp.lineSpacing = 2
+            ts.addAttributes([.paragraphStyle: qp, .foregroundColor: NSColor(white: 1.0, alpha: 0.6)], range: m.range)
+            ts.addAttribute(.foregroundColor, value: accentColor, range: NSRange(location: m.range.location, length: 1))
         }
 
-        // Horizontal rules (---)
-        hrPattern.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            textStorage.addAttribute(.foregroundColor, value: hrColor, range: match.range)
-            textStorage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: match.range)
-            textStorage.addAttribute(.strikethroughColor, value: hrColor, range: match.range)
+        // Horizontal rules
+        hr.enumerateMatches(in: text, range: full) { m, _, _ in
+            guard let m else { return }
+            let c = NSColor(white: 1.0, alpha: 0.15)
+            ts.addAttribute(.foregroundColor, value: c, range: m.range)
+            ts.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: m.range)
+            ts.addAttribute(.strikethroughColor, value: c, range: m.range)
         }
 
         // Links
-        linkPattern.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let match else { return }
-            let textRange = match.range(at: 1)
-            let urlRange = match.range(at: 2)
-            textStorage.addAttribute(.foregroundColor, value: accentColor, range: textRange)
-            textStorage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: textRange)
-            let openBracket = NSRange(location: match.range.location, length: 1)
-            let closeBracketAndUrl = NSRange(location: textRange.location + textRange.length,
-                                              length: match.range.length - textRange.length - 1)
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: openBracket)
-            textStorage.addAttribute(.foregroundColor, value: dimColor, range: closeBracketAndUrl)
-            let url = ns.substring(with: urlRange)
-            textStorage.addAttribute(.link, value: url, range: textRange)
-            // Hide "[" at start and "](url)" at end
-            textStorage.addAttribute(.hiddenSyntax, value: true, range: openBracket)
-            textStorage.addAttribute(.hiddenSyntax, value: true, range: closeBracketAndUrl)
+        link.enumerateMatches(in: text, range: full) { m, _, _ in
+            guard let m else { return }
+            let tr = m.range(at: 1)
+            ts.addAttribute(.foregroundColor, value: accentColor, range: tr)
+            ts.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: tr)
+            ts.addAttribute(.link, value: ns.substring(with: m.range(at: 2)), range: tr)
+            let open = NSRange(location: m.range.location, length: 1)
+            let rest = NSRange(location: tr.location + tr.length, length: m.range.length - tr.length - 1)
+            for r in [open, rest] {
+                ts.addAttribute(.foregroundColor, value: dimColor, range: r)
+                ts.addAttribute(.hiddenSyntax, value: true, range: r)
+            }
         }
     }
 }
 
-// MARK: - Waxpad Layout Manager
+// MARK: - Layout Manager
 
 class WaxpadLayoutManager: NSLayoutManager {
     override func setGlyphs(_ glyphs: UnsafePointer<CGGlyph>,
                             properties props: UnsafePointer<NSLayoutManager.GlyphProperty>,
                             characterIndexes charIndexes: UnsafePointer<Int>,
-                            font aFont: NSFont,
-                            forGlyphRange glyphRange: NSRange) {
-        var modifiedGlyphs = Array(UnsafeBufferPointer(start: glyphs, count: glyphRange.length))
-        var modifiedProps = Array(UnsafeBufferPointer(start: props, count: glyphRange.length))
-
-        let storage = textStorage
+                            font aFont: NSFont, forGlyphRange glyphRange: NSRange) {
+        var mg = Array(UnsafeBufferPointer(start: glyphs, count: glyphRange.length))
+        var mp = Array(UnsafeBufferPointer(start: props, count: glyphRange.length))
         for i in 0..<glyphRange.length {
-            let charIndex = charIndexes[i]
-            if charIndex < (storage?.length ?? 0),
-               storage?.attribute(.hiddenSyntax, at: charIndex, effectiveRange: nil) != nil {
-                modifiedGlyphs[i] = CGGlyph.max   // null glyph
-                modifiedProps[i] = .null            // zero width
+            let ci = charIndexes[i]
+            if ci < (textStorage?.length ?? 0),
+               textStorage?.attribute(.hiddenSyntax, at: ci, effectiveRange: nil) != nil {
+                mg[i] = CGGlyph.max; mp[i] = .null
             }
         }
-
-        modifiedGlyphs.withUnsafeBufferPointer { glyphBuf in
-            modifiedProps.withUnsafeBufferPointer { propBuf in
-                super.setGlyphs(glyphBuf.baseAddress!, properties: propBuf.baseAddress!,
-                               characterIndexes: charIndexes, font: aFont,
-                               forGlyphRange: glyphRange)
-            }
-        }
-    }
-
-    // MARK: - Draw visual checkboxes
-
-    override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
-        super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
-
-        guard let textStorage = self.textStorage,
-              let textContainer = self.textContainers.first else { return }
-
-        let charRange = self.characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
-
-        textStorage.enumerateAttribute(.checkboxMarker, in: charRange, options: []) { value, attrRange, _ in
-            guard let state = value as? String else { return }
-            // Only draw checkbox if brackets are invisible (not on cursor line where they're revealed)
-            if let color = textStorage.attribute(.foregroundColor, at: attrRange.location, effectiveRange: nil) as? NSColor,
-               color != NSColor.clear {
-                return
-            }
-
-            let glyphRange = self.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
-            let boundingRect = self.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-
-            let size: CGFloat = 14
-            let x = origin.x + boundingRect.midX - size / 2
-            let y = origin.y + boundingRect.midY - size / 2
-            let rect = NSRect(x: x, y: y, width: size, height: size)
-            let cornerRadius: CGFloat = 3
-
-            let isChecked = (state == "checked")
-
-            if isChecked {
-                let accent = NSColor(calibratedRed: 0.302, green: 0.557, blue: 1.0, alpha: 1.0)
-                accent.setFill()
-                let bg = NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius)
-                bg.fill()
-
-                // Checkmark
-                NSColor.white.setStroke()
-                let check = NSBezierPath()
-                check.move(to: NSPoint(x: rect.minX + 3, y: rect.midY))
-                check.line(to: NSPoint(x: rect.minX + size * 0.4, y: rect.maxY - 3))
-                check.line(to: NSPoint(x: rect.maxX - 3, y: rect.minY + 3))
-                check.lineWidth = 1.5
-                check.lineCapStyle = .round
-                check.lineJoinStyle = .round
-                check.stroke()
-            } else {
-                NSColor(white: 1.0, alpha: 0.4).setStroke()
-                let border = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5),
-                                          xRadius: cornerRadius, yRadius: cornerRadius)
-                border.lineWidth = 1.0
-                border.stroke()
+        mg.withUnsafeBufferPointer { g in
+            mp.withUnsafeBufferPointer { p in
+                super.setGlyphs(g.baseAddress!, properties: p.baseAddress!,
+                               characterIndexes: charIndexes, font: aFont, forGlyphRange: glyphRange)
             }
         }
     }
 }
 
-// MARK: - Styled Editor
+// MARK: - Editor
 
 class StyledEditor: NSTextView {
     var isRestyling = false
     var previousRevealedLine: NSRange?
+    weak var notesPanel: NotesPanel?
 
     override func keyDown(with event: NSEvent) {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let chars = event.charactersIgnoringModifiers ?? ""
 
-        // Cmd+Enter: toggle checkbox
-        if mods == .command && event.keyCode == 36 {
-            toggleCheckbox()
-            return
+        switch (mods, event.keyCode, chars) {
+        case (.command, 36, _):             toggleCheckbox(); return
+        case (.command, _, "b"):            wrapSelection(with: "**"); return
+        case (.command, _, "i"):            wrapSelection(with: "*"); return
+        case (.command, _, "e"):            wrapSelection(with: "`"); return
+        case ([.command, .option], _, "1"): toggleLinePrefix("# "); return
+        case ([.command, .option], _, "2"): toggleLinePrefix("## "); return
+        case ([.command, .option], _, "3"): toggleLinePrefix("### "); return
+        case ([.command, .shift], 25, _):   toggleCheckbox(); return
+        case ([.command, .shift], 33, _):   notesPanel?.switchTab(delta: -1); return
+        case ([.command, .shift], 30, _):   notesPanel?.switchTab(delta: 1); return
+        default: break
         }
-        // Cmd+B: bold
-        if mods == .command && event.charactersIgnoringModifiers == "b" {
-            wrapSelection(with: "**")
-            return
+
+        if mods == .command, let d = chars.first, d >= "1" && d <= "9" {
+            notesPanel?.selectNote(at: Int(String(d))! - 1); return
         }
-        // Cmd+I: italic
-        if mods == .command && event.charactersIgnoringModifiers == "i" {
-            wrapSelection(with: "*")
-            return
-        }
-        // Cmd+E: inline code
-        if mods == .command && event.charactersIgnoringModifiers == "e" {
-            wrapSelection(with: "`")
-            return
-        }
-        // Enter: continue lists/checkboxes
-        if event.keyCode == 36 && mods.isEmpty {
-            if handleListContinuation() { return }
-        }
+        if event.keyCode == 36 && mods.isEmpty && handleListContinuation() { return }
         super.keyDown(with: event)
     }
 
     override func insertTab(_ sender: Any?) {
         if handleListIndent(outdent: false) { return }
-        insertText("  ", replacementRange: selectedRange())
+        insertText("    ", replacementRange: selectedRange())
     }
 
     override func insertBacktab(_ sender: Any?) {
-        if handleListIndent(outdent: true) { return }
+        _ = handleListIndent(outdent: true)
     }
-
-    // MARK: - Smart Paste (Cmd+V with URL on selection → markdown link)
 
     override func paste(_ sender: Any?) {
-        let pb = NSPasteboard.general
-        guard let pasteString = pb.string(forType: .string) else {
-            super.paste(sender)
-            return
-        }
-
+        guard let paste = NSPasteboard.general.string(forType: .string) else { super.paste(sender); return }
         let sel = selectedRange()
-        // If there's selected text and clipboard contains a URL, make a markdown link
         if sel.length > 0,
-           let url = URL(string: pasteString.trimmingCharacters(in: .whitespacesAndNewlines)),
-           let scheme = url.scheme, (scheme == "http" || scheme == "https") {
-            let selectedText = (string as NSString).substring(with: sel)
-            let link = "[\(selectedText)](\(pasteString.trimmingCharacters(in: .whitespacesAndNewlines)))"
-            if shouldChangeText(in: sel, replacementString: link) {
-                textStorage?.replaceCharacters(in: sel, with: link)
-                didChangeText()
-                setSelectedRange(NSRange(location: sel.location + link.count, length: 0))
-            }
+           let url = URL(string: paste.trimmingCharacters(in: .whitespacesAndNewlines)),
+           let s = url.scheme, s == "http" || s == "https" {
+            let text = (string as NSString).substring(with: sel)
+            let link = "[\(text)](\(paste.trimmingCharacters(in: .whitespacesAndNewlines)))"
+            replaceText(in: sel, with: link, cursorAt: sel.location + link.count)
             return
         }
-
-        // Otherwise: paste as plain text (strip any rich formatting from clipboard)
-        if shouldChangeText(in: sel, replacementString: pasteString) {
-            textStorage?.replaceCharacters(in: sel, with: pasteString)
-            didChangeText()
-            setSelectedRange(NSRange(location: sel.location + (pasteString as NSString).length, length: 0))
-        }
+        replaceText(in: sel, with: paste, cursorAt: sel.location + (paste as NSString).length)
     }
 
-    // MARK: - Wrap Selection (Bold/Italic/Code)
+    private func replaceText(in range: NSRange, with str: String, cursorAt pos: Int) {
+        if shouldChangeText(in: range, replacementString: str) {
+            textStorage?.replaceCharacters(in: range, with: str)
+            didChangeText()
+            setSelectedRange(NSRange(location: pos, length: 0))
+        }
+    }
 
     func wrapSelection(with marker: String) {
         let sel = selectedRange()
         let text = string as NSString
-
+        let mLen = marker.count
         if sel.length > 0 {
             let selected = text.substring(with: sel)
-            // Check if already wrapped — unwrap
-            let mLen = marker.count
             if sel.location >= mLen && sel.location + sel.length + mLen <= text.length {
-                let beforeRange = NSRange(location: sel.location - mLen, length: mLen)
-                let afterRange = NSRange(location: sel.location + sel.length, length: mLen)
-                if text.substring(with: beforeRange) == marker && text.substring(with: afterRange) == marker {
-                    // Unwrap
-                    let fullRange = NSRange(location: sel.location - mLen, length: sel.length + mLen * 2)
-                    if shouldChangeText(in: fullRange, replacementString: selected) {
-                        textStorage?.replaceCharacters(in: fullRange, with: selected)
-                        didChangeText()
-                        setSelectedRange(NSRange(location: sel.location - mLen, length: sel.length))
-                    }
+                let before = NSRange(location: sel.location - mLen, length: mLen)
+                let after = NSRange(location: sel.location + sel.length, length: mLen)
+                if text.substring(with: before) == marker && text.substring(with: after) == marker {
+                    replaceText(in: NSRange(location: sel.location - mLen, length: sel.length + mLen * 2),
+                                with: selected, cursorAt: sel.location - mLen)
                     return
                 }
             }
-            // Wrap
-            let wrapped = marker + selected + marker
-            if shouldChangeText(in: sel, replacementString: wrapped) {
-                textStorage?.replaceCharacters(in: sel, with: wrapped)
-                didChangeText()
-                setSelectedRange(NSRange(location: sel.location + mLen, length: sel.length))
-            }
+            replaceText(in: sel, with: marker + selected + marker, cursorAt: sel.location + mLen)
         } else {
-            // No selection — insert markers and place cursor between
-            let insert = marker + marker
-            if shouldChangeText(in: sel, replacementString: insert) {
-                textStorage?.replaceCharacters(in: sel, with: insert)
-                didChangeText()
-                setSelectedRange(NSRange(location: sel.location + marker.count, length: 0))
-            }
+            replaceText(in: sel, with: marker + marker, cursorAt: sel.location + mLen)
         }
     }
-
-    // MARK: - List Continuation
-
-    func handleListContinuation() -> Bool {
-        let text = string as NSString
-        let cursor = selectedRange().location
-        let lineRange = text.lineRange(for: NSRange(location: cursor, length: 0))
-        let line = text.substring(with: lineRange).trimmingCharacters(in: .newlines)
-
-        let patterns: [(regex: String, emptyCheck: String, newPrefix: String?)] = [
-            ("^(\\s*)- \\[ \\] (.+)$", "^(\\s*)- \\[ \\] $", "- [ ] "),
-            ("^(\\s*)- \\[x\\] (.+)$", "^(\\s*)- \\[x\\] $", "- [ ] "),
-            ("^(\\s*)- (.+)$", "^(\\s*)- $", "- "),
-            ("^(\\s*)\\* (.+)$", "^(\\s*)\\* $", "* "),
-            ("^(\\s*)(\\d+)\\. (.+)$", "^(\\s*)(\\d+)\\. $", nil),
-        ]
-
-        for (contentPattern, emptyPattern, prefix) in patterns {
-            // Empty list item → exit list mode
-            if let emptyRegex = try? NSRegularExpression(pattern: emptyPattern),
-               emptyRegex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) != nil {
-                let replaceRange = NSRange(location: lineRange.location, length: lineRange.length)
-                if shouldChangeText(in: replaceRange, replacementString: "\n") {
-                    textStorage?.replaceCharacters(in: replaceRange, with: "\n")
-                    didChangeText()
-                    setSelectedRange(NSRange(location: lineRange.location + 1, length: 0))
-                }
-                return true
-            }
-
-            // Continue the list
-            if let regex = try? NSRegularExpression(pattern: contentPattern),
-               let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) {
-                let indent = (line as NSString).substring(with: match.range(at: 1))
-                var newLinePrefix: String
-                if let prefix = prefix {
-                    newLinePrefix = indent + prefix
-                } else {
-                    let num = Int((line as NSString).substring(with: match.range(at: 2))) ?? 0
-                    newLinePrefix = indent + "\(num + 1). "
-                }
-                let insertion = "\n" + newLinePrefix
-                let insertAt = NSRange(location: cursor, length: 0)
-                if shouldChangeText(in: insertAt, replacementString: insertion) {
-                    textStorage?.replaceCharacters(in: insertAt, with: insertion)
-                    didChangeText()
-                    setSelectedRange(NSRange(location: cursor + insertion.count, length: 0))
-                }
-                return true
-            }
-        }
-        return false
-    }
-
-    // MARK: - List Indentation
-
-    func handleListIndent(outdent: Bool) -> Bool {
-        let text = string as NSString
-        let cursor = selectedRange().location
-        let lineRange = text.lineRange(for: NSRange(location: cursor, length: 0))
-        let line = text.substring(with: lineRange)
-
-        let listPattern = try! NSRegularExpression(pattern: "^(\\s*)([-*]|\\d+\\.|\\- \\[[ x]\\])")
-        guard listPattern.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) != nil else {
-            return false
-        }
-
-        if outdent {
-            if line.hasPrefix("  ") {
-                let newLine = String(line.dropFirst(2))
-                if shouldChangeText(in: lineRange, replacementString: newLine) {
-                    textStorage?.replaceCharacters(in: lineRange, with: newLine)
-                    didChangeText()
-                    setSelectedRange(NSRange(location: max(lineRange.location, cursor - 2), length: 0))
-                }
-                return true
-            }
-        } else {
-            let newLine = "  " + line
-            if shouldChangeText(in: lineRange, replacementString: newLine) {
-                textStorage?.replaceCharacters(in: lineRange, with: newLine)
-                didChangeText()
-                setSelectedRange(NSRange(location: cursor + 2, length: 0))
-            }
-            return true
-        }
-        return false
-    }
-
-    // MARK: - Checkbox Toggle
 
     func toggleCheckbox() {
         let text = string as NSString
-        let cursorLocation = selectedRange().location
-        let lineRange = text.lineRange(for: NSRange(location: cursorLocation, length: 0))
+        let lineRange = text.lineRange(for: NSRange(location: selectedRange().location, length: 0))
         let line = text.substring(with: lineRange)
-
         var newLine: String
         if line.contains("- [ ]") {
             newLine = line.replacingOccurrences(of: "- [ ]", with: "- [x]")
         } else if line.contains("- [x]") {
             newLine = line.replacingOccurrences(of: "- [x]", with: "- [ ]")
         } else {
-            let trimmed = line.trimmingCharacters(in: .newlines)
             let indent = String(line.prefix(while: { $0 == " " || $0 == "\t" }))
-            let content = trimmed.trimmingCharacters(in: .whitespaces)
-            if content.hasPrefix("- ") || content.hasPrefix("* ") {
-                newLine = indent + "- [ ] " + String(content.dropFirst(2)) + "\n"
-            } else {
-                newLine = indent + "- [ ] " + content + "\n"
-            }
+            let content = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            newLine = indent + "- [ ] " + (content.hasPrefix("- ") || content.hasPrefix("* ")
+                ? String(content.dropFirst(2)) : content) + "\n"
         }
-
-        if shouldChangeText(in: lineRange, replacementString: newLine) {
-            textStorage?.replaceCharacters(in: lineRange, with: newLine)
-            didChangeText()
-            let newCursor = min(lineRange.location + newLine.count - 1,
-                                (string as NSString).length)
-            setSelectedRange(NSRange(location: newCursor, length: 0))
-        }
+        replaceText(in: lineRange, with: newLine,
+                     cursorAt: min(lineRange.location + newLine.count - 1, (string as NSString).length))
     }
 
-    // MARK: - Restyle (undo-safe)
+    func toggleLinePrefix(_ prefix: String) {
+        let text = string as NSString
+        let lineRange = text.lineRange(for: NSRange(location: selectedRange().location, length: 0))
+        let line = text.substring(with: lineRange)
+        let newLine = line.hasPrefix(prefix)
+            ? String(line.dropFirst(prefix.count))
+            : prefix + line.replacingOccurrences(of: "^#{1,3}\\s+", with: "", options: .regularExpression)
+        replaceText(in: lineRange, with: newLine,
+                     cursorAt: min(lineRange.location + newLine.count - 1, (string as NSString).length))
+    }
+
+    func handleListContinuation() -> Bool {
+        let text = string as NSString
+        let cursor = selectedRange().location
+        let lineRange = text.lineRange(for: NSRange(location: cursor, length: 0))
+        let line = text.substring(with: lineRange).trimmingCharacters(in: .newlines)
+        let nsLine = line as NSString
+        let lr = NSRange(location: 0, length: nsLine.length)
+
+        let patterns: [(content: String, empty: String, prefix: String?)] = [
+            ("^(\\s*)- \\[ \\] (.+)$", "^(\\s*)- \\[ \\] $", "- [ ] "),
+            ("^(\\s*)- \\[x\\] (.+)$", "^(\\s*)- \\[x\\] $", "- [ ] "),
+            ("^(\\s*)- (.+)$",          "^(\\s*)- $",          "- "),
+            ("^(\\s*)\\* (.+)$",        "^(\\s*)\\* $",        "* "),
+            ("^(\\s*)(\\d+)\\. (.+)$",  "^(\\s*)(\\d+)\\. $",  nil),
+        ]
+
+        for (contentPat, emptyPat, prefix) in patterns {
+            if let re = try? NSRegularExpression(pattern: emptyPat),
+               re.firstMatch(in: line, range: lr) != nil {
+                replaceText(in: lineRange, with: "\n", cursorAt: lineRange.location + 1)
+                return true
+            }
+            if let re = try? NSRegularExpression(pattern: contentPat),
+               let m = re.firstMatch(in: line, range: lr) {
+                let indent = nsLine.substring(with: m.range(at: 1))
+                let newPrefix: String
+                if let p = prefix { newPrefix = indent + p }
+                else { newPrefix = indent + "\((Int(nsLine.substring(with: m.range(at: 2))) ?? 0) + 1). " }
+                let insertion = "\n" + newPrefix
+                replaceText(in: NSRange(location: cursor, length: 0), with: insertion,
+                             cursorAt: cursor + insertion.count)
+                return true
+            }
+        }
+        return false
+    }
+
+    func handleListIndent(outdent: Bool) -> Bool {
+        let text = string as NSString
+        let cursor = selectedRange().location
+        let lineRange = text.lineRange(for: NSRange(location: cursor, length: 0))
+        let line = text.substring(with: lineRange)
+        let pat = try! NSRegularExpression(pattern: "^(\\s*)([-*]|\\d+\\.|\\- \\[[ x]\\])")
+        guard pat.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) != nil else { return false }
+        if outdent {
+            guard line.hasPrefix("    ") else { return false }
+            replaceText(in: lineRange, with: String(line.dropFirst(4)), cursorAt: max(lineRange.location, cursor - 4))
+        } else {
+            replaceText(in: lineRange, with: "    " + line, cursorAt: cursor + 4)
+        }
+        return true
+    }
 
     func restyleMarkdown() {
         guard !isRestyling, let ts = textStorage else { return }
         isRestyling = true
         let sel = selectedRange()
-        // Disable undo registration during restyling
         undoManager?.disableUndoRegistration()
         ts.beginEditing()
         MarkdownStyler.style(ts)
-        // Cursor-line reveal: remove .hiddenSyntax from the current line
-        // and restore checkbox bracket visibility
         let ns = string as NSString
         if sel.location <= ns.length {
             let cursorLine = ns.lineRange(for: NSRange(location: sel.location, length: 0))
             ts.removeAttribute(.hiddenSyntax, range: cursorLine)
-            ts.removeAttribute(.checkboxMarker, range: cursorLine)
-            // Restore bracket text color on cursor line (was made transparent for checkbox drawing)
-            ts.enumerateAttribute(.checkboxMarker, in: cursorLine, options: []) { _, _, _ in }
-            // Re-color any [ ]/[x] brackets on this line back to visible
-            let lineText = ns.substring(with: cursorLine)
-            if let uncheckedRange = lineText.range(of: "[ ]") {
-                let loc = cursorLine.location + lineText.distance(from: lineText.startIndex, to: uncheckedRange.lowerBound)
-                ts.addAttribute(.foregroundColor, value: MarkdownStyler.accentColor, range: NSRange(location: loc, length: 3))
-            }
-            if let checkedRange = lineText.range(of: "[x]") {
-                let loc = cursorLine.location + lineText.distance(from: lineText.startIndex, to: checkedRange.lowerBound)
-                ts.addAttribute(.foregroundColor, value: MarkdownStyler.accentColor, range: NSRange(location: loc, length: 3))
-            }
             previousRevealedLine = cursorLine
         }
         ts.endEditing()
-        // Invalidate all glyphs so hidden syntax takes effect everywhere
         if let lm = layoutManager {
-            let fullRange = NSRange(location: 0, length: ns.length)
-            lm.invalidateGlyphs(forCharacterRange: fullRange, changeInLength: 0, actualCharacterRange: nil)
-            lm.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
+            let full = NSRange(location: 0, length: ns.length)
+            lm.invalidateGlyphs(forCharacterRange: full, changeInLength: 0, actualCharacterRange: nil)
+            lm.invalidateLayout(forCharacterRange: full, actualCharacterRange: nil)
         }
         undoManager?.enableUndoRegistration()
-        if sel.location <= ns.length {
-            setSelectedRange(sel)
-        }
+        if sel.location <= ns.length { setSelectedRange(sel) }
         isRestyling = false
     }
 }
@@ -692,203 +479,116 @@ class StyledEditor: NSTextView {
 // MARK: - Tab Button
 
 class TabButton: NSView {
-    static let accentColor = NSColor(calibratedRed: 0.302, green: 0.557, blue: 1.0, alpha: 1.0)
-    static let activeTextColor = accentColor
-    static let inactiveTextColor = NSColor(white: 1.0, alpha: 0.45)
-    static let activeBg = accentColor.withAlphaComponent(0.12)
-    static let hoverBg = NSColor(white: 1.0, alpha: 0.06)
-    static let pressedBg = NSColor(white: 1.0, alpha: 0.14)
-    static let pillRadius: CGFloat = 6
-    static let hPad: CGFloat = 10
-    static let vPad: CGFloat = 4
-
     let label = NSTextField(labelWithString: "")
-    var isActive = false { didSet { updateAppearance() } }
-    var isHovered = false { didSet { updateAppearance() } }
-    var isPressed = false { didSet { updateAppearance() } }
+    var isActive = false { didSet { refresh() } }
+    var isHovered = false { didSet { refresh() } }
+    var isPressed = false { didSet { refresh() } }
     var onClick: (() -> Void)?
-    var onRightClick: (() -> Void)?
-    var trackingArea: NSTrackingArea?
+    var onDoubleClick: (() -> Void)?
+    private var tracking: NSTrackingArea?
 
     init(title: String) {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = Self.pillRadius
-
+        layer?.cornerRadius = 8
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = NSFont.systemFont(ofSize: 12, weight: .regular)
-        label.textColor = Self.inactiveTextColor
+        label.font = NSFont.systemFont(ofSize: 12.5)
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
         label.stringValue = title
         addSubview(label)
-
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.hPad),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.hPad),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            heightAnchor.constraint(equalToConstant: 20),
+            heightAnchor.constraint(equalToConstant: 26),
         ])
-
-        updateAppearance()
+        refresh()
     }
-
     required init?(coder: NSCoder) { fatalError() }
 
-    func updateAppearance() {
-        label.font = NSFont.systemFont(ofSize: 12, weight: isActive ? .medium : .regular)
-        label.textColor = isActive ? Self.activeTextColor : Self.inactiveTextColor
-
-        if isPressed {
-            layer?.backgroundColor = Self.pressedBg.cgColor
-        } else if isActive {
-            layer?.backgroundColor = Self.activeBg.cgColor
-        } else if isHovered {
-            layer?.backgroundColor = Self.hoverBg.cgColor
-        } else {
-            layer?.backgroundColor = nil
-        }
+    func refresh() {
+        label.font = NSFont.systemFont(ofSize: 12.5, weight: isActive ? .medium : .regular)
+        label.textColor = isActive ? NSColor(white: 0.95, alpha: 1.0) : NSColor(white: 1.0, alpha: 0.40)
+        if isPressed { layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.16).cgColor }
+        else if isActive { layer?.backgroundColor = MarkdownStyler.accentColor.withAlphaComponent(0.15).cgColor }
+        else if isHovered { layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.07).cgColor }
+        else { layer?.backgroundColor = nil }
     }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let ta = trackingArea { removeTrackingArea(ta) }
-        trackingArea = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp], owner: self)
-        addTrackingArea(trackingArea!)
+        if let t = tracking { removeTrackingArea(t) }
+        tracking = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp], owner: self)
+        addTrackingArea(tracking!)
     }
-
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false; isPressed = false }
-    override func mouseDown(with event: NSEvent) {
-        if event.type == .rightMouseDown { return }
-        isPressed = true
-    }
+    override func mouseDown(with event: NSEvent) { isPressed = true }
     override func mouseUp(with event: NSEvent) {
         isPressed = false
-        if bounds.contains(convert(event.locationInWindow, from: nil)) {
-            onClick?()
-        }
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        event.clickCount == 2 ? onDoubleClick?() : onClick?()
     }
-    override func rightMouseDown(with event: NSEvent) {
-        onRightClick?()
-        // Show context menu
-        if let menu = menu {
-            NSMenu.popUpContextMenu(menu, with: event, for: self)
-        }
-    }
-
     override var intrinsicContentSize: NSSize {
-        let textSize = label.intrinsicContentSize
-        return NSSize(width: textSize.width + Self.hPad * 2, height: 20)
+        NSSize(width: label.intrinsicContentSize.width + 24, height: 26)
     }
 }
 
-// MARK: - Add Button (the "+")
+// MARK: - Empty State Button
 
-class AddButton: NSView {
-    static let iconColor = NSColor(white: 1.0, alpha: 0.35)
-    static let iconHoverColor = NSColor(white: 1.0, alpha: 0.45)
-    static let hoverBg = NSColor(white: 1.0, alpha: 0.06)
-
-    let icon = NSTextField(labelWithString: "+")
-    var isHovered = false { didSet { updateAppearance() } }
-    var onClick: (() -> Void)?
-    var trackingArea: NSTrackingArea?
-
-    init() {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 5
-
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        icon.textColor = Self.iconColor
-        icon.alignment = .center
-        addSubview(icon)
-
-        NSLayoutConstraint.activate([
-            icon.centerXAnchor.constraint(equalTo: centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            widthAnchor.constraint(equalToConstant: 20),
-            heightAnchor.constraint(equalToConstant: 20),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    func updateAppearance() {
-        icon.textColor = isHovered ? Self.iconHoverColor : Self.iconColor
-        layer?.backgroundColor = isHovered ? Self.hoverBg.cgColor : nil
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let ta = trackingArea { removeTrackingArea(ta) }
-        trackingArea = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp], owner: self)
-        addTrackingArea(trackingArea!)
-    }
-
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
-    override func mouseDown(with event: NSEvent) { onClick?() }
-
-    override var intrinsicContentSize: NSSize { NSSize(width: 20, height: 20) }
-}
 
 // MARK: - Notes Panel
 
-class NotesPanel: NSPanel {
-    let tabBar = NSScrollView()
+class NotesPanel: NSPanel, NSTextViewDelegate {
     let tabStack = NSStackView()
-    let addButton = AddButton()
-    let titleField = NSTextField()
     let editor: StyledEditor
-    let editorScroll = NSScrollView()
     var currentFile: URL?
-    var saveTimer: Timer?
-    var fileWatcher: DispatchSourceFileSystemObject?
     var notes: [URL] = []
     var tabButtons: [TabButton] = []
+    private var saveTimer: Timer?
+    private var fileWatcher: DispatchSourceFileSystemObject?
+    private var emptyStateView: NSView?
+    private var editorScroll: NSScrollView?
+    private var addBtnLabel: NSTextField?
+    private var addBtnWrap: NSView?
 
     init() {
-        // Assemble custom text system for WYSIWYG markdown hiding
-        let textStorage = NSTextStorage()
-        let layoutManager = WaxpadLayoutManager()
-        let textContainer = NSTextContainer(containerSize: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
-        textContainer.widthTracksTextView = true
-        layoutManager.addTextContainer(textContainer)
-        textStorage.addLayoutManager(layoutManager)
-        editor = StyledEditor(frame: .zero, textContainer: textContainer)
+        let ts = NSTextStorage()
+        let lm = WaxpadLayoutManager()
+        let tc = NSTextContainer(containerSize: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        tc.widthTracksTextView = true
+        lm.addTextContainer(tc)
+        ts.addLayoutManager(lm)
+        editor = StyledEditor(frame: .zero, textContainer: tc)
 
-        super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
-            styleMask: [.titled, .resizable, .fullSizeContentView, .utilityWindow, .hudWindow],
-            backing: .buffered,
-            defer: false
-        )
-        self.title = ""
-        self.titlebarAppearsTransparent = true
-        self.titleVisibility = .hidden
-        // Hide the standard window buttons (close, minimize, zoom)
-        self.standardWindowButton(.closeButton)?.isHidden = true
-        self.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        self.standardWindowButton(.zoomButton)?.isHidden = true
-        self.level = .floating
-        self.isFloatingPanel = true
-        self.hidesOnDeactivate = false
-        self.animationBehavior = .none
-        self.isMovableByWindowBackground = true
-        self.backgroundColor = NSColor(calibratedRed: 0.06, green: 0.065, blue: 0.07, alpha: 0.95)
-        self.isOpaque = false
-        self.center()
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 540, height: 440),
+                   styleMask: [.titled, .resizable, .fullSizeContentView, .utilityWindow, .hudWindow],
+                   backing: .buffered, defer: false)
+
+        editor.notesPanel = self
+        title = ""
+        titlebarAppearsTransparent = true
+        titleVisibility = .hidden
+        for btn in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            standardWindowButton(btn)?.isHidden = true
+        }
+        level = .floating
+        isFloatingPanel = true
+        hidesOnDeactivate = false
+        animationBehavior = .none
+        isMovableByWindowBackground = true
+        backgroundColor = NSColor(calibratedRed: 0.09, green: 0.09, blue: 0.10, alpha: 0.99)
+        isOpaque = false
+        hasShadow = true
+        center()
         setupUI()
         loadNotes()
-        // Save frame on every move/resize so it survives force-kill
-        NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: self, queue: nil) { _ in
-            UserDefaults.standard.set(NSStringFromRect(self.frame), forKey: "WaxpadWindowFrame")
-        }
-        NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: self, queue: nil) { _ in
-            UserDefaults.standard.set(NSStringFromRect(self.frame), forKey: "WaxpadWindowFrame")
+
+        for n in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+            NotificationCenter.default.addObserver(forName: n, object: self, queue: nil) { _ in
+                UserDefaults.standard.set(NSStringFromRect(self.frame), forKey: "WaxpadWindowFrame")
+            }
         }
     }
 
@@ -898,8 +598,13 @@ class NotesPanel: NSPanel {
     func setupUI() {
         guard let content = contentView else { return }
         content.wantsLayer = true
-        content.layer?.backgroundColor = NSColor(calibratedRed: 0.06, green: 0.065, blue: 0.07, alpha: 0.95).cgColor
+        content.layer?.backgroundColor = NSColor(calibratedRed: 0.10, green: 0.10, blue: 0.11, alpha: 1.0).cgColor
+        content.layer?.cornerRadius = 14
+        content.layer?.masksToBounds = true
+        content.layer?.borderWidth = 1
+        content.layer?.borderColor = NSColor(white: 1.0, alpha: 0.08).cgColor
 
+        let tabBar = NSScrollView()
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         tabBar.hasHorizontalScroller = false
         tabBar.hasVerticalScroller = false
@@ -909,44 +614,45 @@ class NotesPanel: NSPanel {
 
         tabStack.translatesAutoresizingMaskIntoConstraints = false
         tabStack.orientation = .horizontal
-        tabStack.spacing = 2
+        tabStack.spacing = 4
         tabStack.alignment = .centerY
-        tabStack.edgeInsets = NSEdgeInsets(top: 0, left: 16, bottom: 0, right: 4)
+        tabStack.edgeInsets = NSEdgeInsets(top: 0, left: 20, bottom: 0, right: 4)
         tabBar.documentView = tabStack
 
-        addButton.translatesAutoresizingMaskIntoConstraints = false
-        addButton.onClick = { [weak self] in self?.addNote() }
+        let addBtn = NSTextField(labelWithString: "+")
+        addBtn.translatesAutoresizingMaskIntoConstraints = false
+        addBtn.font = NSFont.systemFont(ofSize: 16, weight: .light)
+        addBtn.textColor = NSColor(white: 1.0, alpha: 0.30)
+        let addWrap = NSView()
+        addWrap.translatesAutoresizingMaskIntoConstraints = false
+        addWrap.wantsLayer = true
+        addWrap.layer?.cornerRadius = 7
+        addWrap.addSubview(addBtn)
+        NSLayoutConstraint.activate([
+            addBtn.centerXAnchor.constraint(equalTo: addWrap.centerXAnchor),
+            addBtn.centerYAnchor.constraint(equalTo: addWrap.centerYAnchor),
+            addWrap.widthAnchor.constraint(equalToConstant: 26),
+            addWrap.heightAnchor.constraint(equalToConstant: 26),
+        ])
+        addWrap.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(addNote)))
+        addBtnLabel = addBtn
+        addBtnWrap = addWrap
 
-        let tabRow = NSStackView(views: [tabBar, addButton])
+        let tabRow = NSStackView(views: [tabBar, addWrap])
         tabRow.translatesAutoresizingMaskIntoConstraints = false
         tabRow.orientation = .horizontal
         tabRow.spacing = 4
         tabRow.alignment = .centerY
-        tabRow.edgeInsets = NSEdgeInsets(top: 10, left: 4, bottom: 6, right: 12)
+        tabRow.edgeInsets = NSEdgeInsets(top: 0, left: -4, bottom: 0, right: 12)
 
-        titleField.translatesAutoresizingMaskIntoConstraints = false
-        titleField.isEditable = true
-        titleField.isBordered = false
-        titleField.drawsBackground = false
-        titleField.font = NSFont.systemFont(ofSize: 20, weight: .bold)
-        titleField.textColor = .white
-        titleField.placeholderString = "Note title..."
-        titleField.focusRingType = .none
-        titleField.delegate = self
-        titleField.lineBreakMode = .byTruncatingTail
-        titleField.cell?.wraps = false
-        titleField.cell?.isScrollable = true
-
-        let sep = NSBox()
-        sep.translatesAutoresizingMaskIntoConstraints = false
-        sep.boxType = .separator
-
-        editorScroll.translatesAutoresizingMaskIntoConstraints = false
-        editorScroll.hasVerticalScroller = true
-        editorScroll.hasHorizontalScroller = false
-        editorScroll.drawsBackground = false
-        editorScroll.borderType = .noBorder
-        editorScroll.documentView = editor
+        let scroll = NSScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.documentView = editor
+        editorScroll = scroll
 
         editor.minSize = NSSize(width: 0, height: 0)
         editor.maxSize = NSSize(width: .max, height: .max)
@@ -955,120 +661,159 @@ class NotesPanel: NSPanel {
         editor.autoresizingMask = [.width]
         editor.textContainer?.containerSize = NSSize(width: 0, height: .max)
         editor.textContainer?.widthTracksTextView = true
-        editor.textContainerInset = NSSize(width: 16, height: 12)
+        editor.textContainerInset = NSSize(width: 20, height: 14)
         editor.isRichText = true
         editor.isAutomaticQuoteSubstitutionEnabled = false
         editor.isAutomaticDashSubstitutionEnabled = false
         editor.isAutomaticTextReplacementEnabled = false
         editor.isAutomaticSpellingCorrectionEnabled = false
         editor.isAutomaticLinkDetectionEnabled = false
-        editor.insertionPointColor = NSColor(calibratedRed: 0.302, green: 0.557, blue: 1.0, alpha: 1.0)
+        editor.insertionPointColor = MarkdownStyler.accentColor
         editor.drawsBackground = false
         editor.allowsUndo = true
+        editor.isEditable = false
         editor.delegate = self
-        editor.typingAttributes = [
-            .font: MarkdownStyler.bodyFont,
-            .foregroundColor: MarkdownStyler.textColor,
-        ]
+        editor.typingAttributes = [.font: MarkdownStyler.bodyFont, .foregroundColor: MarkdownStyler.textColor]
 
         content.addSubview(tabRow)
-        content.addSubview(titleField)
-        content.addSubview(sep)
-        content.addSubview(editorScroll)
-
+        content.addSubview(scroll)
         NSLayoutConstraint.activate([
-            tabRow.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
+            tabRow.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor, constant: 2),
             tabRow.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             tabRow.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            tabRow.heightAnchor.constraint(equalToConstant: 38),
-
-            titleField.topAnchor.constraint(equalTo: tabRow.bottomAnchor, constant: 8),
-            titleField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            titleField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-
-            sep.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 8),
-            sep.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            sep.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-
-            editorScroll.topAnchor.constraint(equalTo: sep.bottomAnchor, constant: 8),
-            editorScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            editorScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            editorScroll.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            tabRow.heightAnchor.constraint(equalToConstant: 34),
+            scroll.topAnchor.constraint(equalTo: tabRow.bottomAnchor, constant: 4),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
     }
 
-    // MARK: - Notes Management
+    // MARK: - Empty State
+
+    func showEmptyState() {
+        guard emptyStateView == nil, let content = contentView else { return }
+        editorScroll?.isHidden = true
+
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let emoji = NSTextField(labelWithString: "📝")
+        emoji.font = NSFont.systemFont(ofSize: 32)
+        emoji.alignment = .center
+        emoji.translatesAutoresizingMaskIntoConstraints = false
+
+        let title = NSTextField(labelWithString: "No notes yet")
+        title.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        title.textColor = NSColor(white: 1.0, alpha: 0.5)
+        title.alignment = .center
+        title.translatesAutoresizingMaskIntoConstraints = false
+
+        let subtitle = NSTextField(labelWithString: "Hit + to get started")
+        subtitle.font = NSFont.systemFont(ofSize: 11, weight: .regular)
+        subtitle.textColor = NSColor(white: 1.0, alpha: 0.25)
+        subtitle.alignment = .center
+        subtitle.translatesAutoresizingMaskIntoConstraints = false
+
+        container.addSubview(emoji)
+        container.addSubview(title)
+        container.addSubview(subtitle)
+        content.addSubview(container)
+
+        NSLayoutConstraint.activate([
+            container.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            container.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            emoji.topAnchor.constraint(equalTo: container.topAnchor),
+            emoji.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            title.topAnchor.constraint(equalTo: emoji.bottomAnchor, constant: 8),
+            title.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 4),
+            subtitle.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            subtitle.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        emptyStateView = container
+
+        // Make the + button pop
+        let accent = MarkdownStyler.accentColor
+        addBtnLabel?.textColor = accent
+        addBtnWrap?.layer?.backgroundColor = accent.withAlphaComponent(0.15).cgColor
+        addBtnWrap?.layer?.borderWidth = 1
+        addBtnWrap?.layer?.borderColor = accent.withAlphaComponent(0.4).cgColor
+    }
+
+    func hideEmptyState() {
+        emptyStateView?.removeFromSuperview()
+        emptyStateView = nil
+        editorScroll?.isHidden = false
+        editor.isEditable = true
+        // Reset + button to normal
+        addBtnLabel?.textColor = NSColor(white: 1.0, alpha: 0.30)
+        addBtnWrap?.layer?.backgroundColor = nil
+        addBtnWrap?.layer?.borderWidth = 0
+    }
+
+    // MARK: - Notes
 
     func loadNotes() {
-        let fm = FileManager.default
-        notes = (try? fm.contentsOfDirectory(at: notesDir, includingPropertiesForKeys: nil))?
+        notes = (try? FileManager.default.contentsOfDirectory(at: notesDir, includingPropertiesForKeys: nil))?
             .filter { $0.pathExtension == "md" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
         rebuildTabs()
-        if !notes.isEmpty && currentFile == nil {
-            selectNote(at: 0)
+        if notes.isEmpty {
+            currentFile = nil
+            editor.string = ""
+            editor.isEditable = false
+            showEmptyState()
+        } else {
+            hideEmptyState()
+            editor.isEditable = true
+            if currentFile == nil { selectNote(at: 0) }
         }
     }
 
     func rebuildTabs() {
         tabButtons.forEach { $0.removeFromSuperview() }
         tabButtons.removeAll()
-
         for (i, url) in notes.enumerated() {
-            let title = noteTitle(from: url)
-            let tab = TabButton(title: title)
+            let tab = TabButton(title: url.deletingPathExtension().lastPathComponent)
             tab.translatesAutoresizingMaskIntoConstraints = false
             tab.onClick = { [weak self] in self?.selectNote(at: i) }
-            // Right-click context menu
+            tab.onDoubleClick = { [weak self] in self?.renameNote(at: i) }
             let menu = NSMenu()
-            let deleteItem = NSMenuItem(title: "Delete Note", action: #selector(deleteNoteFromMenu(_:)), keyEquivalent: "")
-            deleteItem.tag = i
-            deleteItem.target = self
-            menu.addItem(deleteItem)
+            let del = NSMenuItem(title: "Delete Note", action: #selector(deleteNote(_:)), keyEquivalent: "")
+            del.tag = i; del.target = self; menu.addItem(del)
             tab.menu = menu
-            tab.onRightClick = {} // handled by menu
             tabStack.addArrangedSubview(tab)
             tabButtons.append(tab)
         }
         highlightActiveTab()
     }
 
-    func noteTitle(from url: URL) -> String {
-        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
-            return url.deletingPathExtension().lastPathComponent
-        }
-        let firstLine = content.prefix(while: { $0 != "\n" })
-            .trimmingCharacters(in: .whitespaces)
-            .replacingOccurrences(of: "^#+\\s*", with: "", options: .regularExpression)
-        return firstLine.isEmpty ? url.deletingPathExtension().lastPathComponent : String(firstLine)
-    }
-
     func highlightActiveTab() {
-        guard let file = currentFile, let idx = notes.firstIndex(of: file) else { return }
-        for (i, tab) in tabButtons.enumerated() {
-            tab.isActive = i == idx
-        }
+        guard let f = currentFile, let idx = notes.firstIndex(of: f) else { return }
+        for (i, tab) in tabButtons.enumerated() { tab.isActive = i == idx }
     }
 
     func selectNote(at index: Int) {
         guard index >= 0, index < notes.count else { return }
         saveCurrentNote()
         currentFile = notes[index]
-        let content = (try? String(contentsOf: notes[index], encoding: .utf8)) ?? ""
-        let lines = content.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
-        let title = (lines.first ?? "")
-            .trimmingCharacters(in: .whitespaces)
-            .replacingOccurrences(of: "^#+\\s*", with: "", options: .regularExpression)
-        let body = lines.count > 1 ? String(lines[1]) : ""
-        let trimmedBody = body.hasPrefix("\n") ? String(body.dropFirst()) : body
-
-        titleField.stringValue = title
-        // Reset undo manager when switching notes
         editor.undoManager?.removeAllActions()
-        editor.string = trimmedBody
+        editor.string = (try? String(contentsOf: notes[index], encoding: .utf8)) ?? ""
         editor.restyleMarkdown()
         highlightActiveTab()
         watchFile(notes[index])
+    }
+
+    func switchTab(delta: Int) {
+        guard let f = currentFile, let idx = notes.firstIndex(of: f) else { return }
+        let next = idx + delta
+        if next >= 0 && next < notes.count { selectNote(at: next) }
+    }
+
+    func saveCurrentNote() {
+        guard let f = currentFile, FileManager.default.fileExists(atPath: f.path) else { return }
+        try? editor.string.write(to: f, atomically: true, encoding: .utf8)
     }
 
     func scheduleSave() {
@@ -1078,132 +823,97 @@ class NotesPanel: NSPanel {
         }
     }
 
-    func saveCurrentNote() {
-        guard let file = currentFile else { return }
-        let title = titleField.stringValue.trimmingCharacters(in: .whitespaces)
-        let heading = title.isEmpty ? "" : "# \(title)"
-        let body = editor.string
-        let content = heading + "\n" + body
-        try? content.write(to: file, atomically: true, encoding: .utf8)
-    }
+    func renameNote(at index: Int) {
+        guard index >= 0, index < notes.count else { return }
+        let url = notes[index]
+        let current = url.deletingPathExtension().lastPathComponent
 
-    func renameCurrentFile() {
-        guard let file = currentFile else { return }
-        let title = titleField.stringValue.trimmingCharacters(in: .whitespaces)
-        guard !title.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rename Note"
+        alert.informativeText = "Enter a new name:"
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        input.stringValue = current
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let safe = title
-            .replacingOccurrences(of: "[/\\\\:]", with: "-", options: .regularExpression)
-            .prefix(60)
-        let newName = safe + ".md"
-        let newURL = notesDir.appendingPathComponent(String(newName))
+        let newName = input.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !newName.isEmpty, newName != current else { return }
 
-        if newURL != file && !FileManager.default.fileExists(atPath: newURL.path) {
+        let safe = newName.replacingOccurrences(of: "[/\\\\:]", with: "-", options: .regularExpression).prefix(60)
+        let newURL = notesDir.appendingPathComponent(String(safe) + ".md")
+
+        if newURL != url && !FileManager.default.fileExists(atPath: newURL.path) {
             saveCurrentNote()
-            try? FileManager.default.moveItem(at: file, to: newURL)
-            currentFile = newURL
-            loadNotes()
-            if let idx = notes.firstIndex(of: newURL) {
-                selectNote(at: idx)
-            }
+            try? FileManager.default.moveItem(at: url, to: newURL)
         }
-        if let idx = notes.firstIndex(of: currentFile ?? file) {
-            tabButtons[idx].label.stringValue = title
+
+        let wasSelected = (currentFile == url)
+        loadNotes()
+        if wasSelected, let idx = notes.firstIndex(of: FileManager.default.fileExists(atPath: newURL.path) ? newURL : url) {
+            selectNote(at: idx)
         }
     }
-
-    // MARK: - File Watching
-
-    func watchFile(_ url: URL) {
-        fileWatcher?.cancel()
-        let fd = open(url.path, O_EVTONLY)
-        guard fd >= 0 else { return }
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd, eventMask: .write, queue: .main
-        )
-        source.setEventHandler { [weak self] in
-            guard let self, let file = self.currentFile else { return }
-            if let content = try? String(contentsOf: file, encoding: .utf8) {
-                let lines = content.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
-                let title = (lines.first ?? "")
-                    .trimmingCharacters(in: .whitespaces)
-                    .replacingOccurrences(of: "^#+\\s*", with: "", options: .regularExpression)
-                let body = lines.count > 1 ? String(lines[1]) : ""
-                let trimmedBody = body.hasPrefix("\n") ? String(body.dropFirst()) : body
-                if title != self.titleField.stringValue || trimmedBody != self.editor.string {
-                    self.titleField.stringValue = title
-                    let sel = self.editor.selectedRange()
-                    self.editor.string = trimmedBody
-                    self.editor.restyleMarkdown()
-                    if sel.location <= trimmedBody.count {
-                        self.editor.setSelectedRange(sel)
-                    }
-                }
-            }
-        }
-        source.setCancelHandler { Darwin.close(fd) }
-        source.resume()
-        fileWatcher = source
-    }
-
-    // MARK: - Actions
 
     @objc func addNote() {
-        let name = "note-\(Int(Date().timeIntervalSince1970)).md"
-        let file = notesDir.appendingPathComponent(name)
-        try? "# New Note\n".write(to: file, atomically: true, encoding: .utf8)
-        loadNotes()
-        if let idx = notes.firstIndex(of: file) {
-            selectNote(at: idx)
-            self.makeFirstResponder(titleField)
-            titleField.selectText(nil)
+        var file = notesDir.appendingPathComponent("New Note.md")
+        var c = 2
+        while FileManager.default.fileExists(atPath: file.path) {
+            file = notesDir.appendingPathComponent("New Note \(c).md"); c += 1
         }
+        try? "".write(to: file, atomically: true, encoding: .utf8)
+        loadNotes()
+        if let idx = notes.firstIndex(of: file) { selectNote(at: idx); makeFirstResponder(editor) }
     }
 
-    @objc func deleteNoteFromMenu(_ sender: NSMenuItem) {
+    @objc func deleteNote(_ sender: NSMenuItem) {
         let idx = sender.tag
         guard idx >= 0, idx < notes.count else { return }
         let alert = NSAlert()
-        alert.messageText = "Delete \"\(noteTitle(from: notes[idx]))\"?"
+        alert.messageText = "Delete \"\(notes[idx].deletingPathExtension().lastPathComponent)\"?"
         alert.informativeText = "This cannot be undone."
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         try? FileManager.default.removeItem(at: notes[idx])
-        if currentFile == notes[idx] {
-            currentFile = nil
-            editor.string = ""
-            titleField.stringValue = ""
-        }
+        if currentFile == notes[idx] { currentFile = nil; editor.string = "" }
         loadNotes()
     }
-}
 
-// MARK: - Title Field Delegate
-
-extension NotesPanel: NSTextFieldDelegate {
-    func controlTextDidChange(_ obj: Notification) {
-        scheduleSave()
-        if let file = currentFile, let idx = notes.firstIndex(of: file) {
-            let title = titleField.stringValue.trimmingCharacters(in: .whitespaces)
-            tabButtons[idx].label.stringValue = title.isEmpty ? "Untitled" : title
+    func watchFile(_ url: URL) {
+        fileWatcher?.cancel()
+        let fd = open(url.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .delete, .rename], queue: .main)
+        source.setEventHandler { [weak self] in
+            guard let self, let file = self.currentFile else { return }
+            // File was deleted or renamed externally — swap to another note
+            if !FileManager.default.fileExists(atPath: file.path) {
+                self.fileWatcher?.cancel()
+                self.currentFile = nil
+                self.loadNotes()
+                if !self.notes.isEmpty { self.selectNote(at: 0) }
+                else { self.editor.string = "" }
+                return
+            }
+            // File was modified externally — reload content
+            guard let content = try? String(contentsOf: file, encoding: .utf8),
+                  content != self.editor.string else { return }
+            let sel = self.editor.selectedRange()
+            self.editor.string = content
+            self.editor.restyleMarkdown()
+            if sel.location <= content.count { self.editor.setSelectedRange(sel) }
         }
+        source.setCancelHandler { Darwin.close(fd) }
+        source.resume()
+        fileWatcher = source
     }
 
-    func controlTextDidEndEditing(_ obj: Notification) {
-        renameCurrentFile()
-        if let movement = obj.userInfo?["NSTextMovement"] as? Int,
-           movement == NSReturnTextMovement {
-            self.makeFirstResponder(editor)
-            editor.setSelectedRange(NSRange(location: 0, length: 0))
-        }
-    }
-}
+    // MARK: - NSTextViewDelegate
 
-// MARK: - Editor Delegate
-
-extension NotesPanel: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         guard !editor.isRestyling else { return }
         scheduleSave()
@@ -1216,11 +926,8 @@ extension NotesPanel: NSTextViewDelegate {
         guard ns.length > 0 else { return }
         let sel = editor.selectedRange()
         guard sel.location <= ns.length else { return }
-        let currentLine = ns.lineRange(for: NSRange(location: sel.location, length: 0))
-        // Only restyle if the cursor moved to a different line
-        if let prev = editor.previousRevealedLine, NSEqualRanges(prev, currentLine) {
-            return
-        }
+        let line = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+        if let prev = editor.previousRevealedLine, NSEqualRanges(prev, line) { return }
         editor.restyleMarkdown()
     }
 }
