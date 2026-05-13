@@ -927,9 +927,11 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
         fileWatcher?.cancel()
         let fd = open(url.path, O_EVTONLY)
         guard fd >= 0 else { return }
-        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .delete, .rename], queue: .main)
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .delete, .rename, .attrib], queue: .main)
         source.setEventHandler { [weak self] in
             guard let self, let file = self.currentFile else { return }
+            let flags = source.data
+            let replaced = flags.contains(.delete) || flags.contains(.rename)
             // File was deleted or renamed externally — swap to another note
             if !FileManager.default.fileExists(atPath: file.path) {
                 self.fileWatcher?.cancel()
@@ -939,19 +941,30 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
                 else { self.editor.string = "" }
                 return
             }
-            // File was modified externally — reload content
-            guard let content = try? String(contentsOf: file, encoding: .utf8),
-                  content != self.editor.string else { return }
-            let sel = self.editor.selectedRange()
-            self.isExternalReload = true
-            self.editor.string = content
-            self.editor.restyleMarkdown()
-            if sel.location <= (content as NSString).length { self.editor.setSelectedRange(sel) }
-            self.isExternalReload = false
+            // Atomic save (editor wrote temp file then renamed over original):
+            // the old fd is stale — reload content and re-watch the new inode
+            if replaced {
+                self.reloadFileContent(file)
+                self.watchFile(file)
+                return
+            }
+            // File was modified externally (in-place write)
+            self.reloadFileContent(file)
         }
         source.setCancelHandler { Darwin.close(fd) }
         source.resume()
         fileWatcher = source
+    }
+
+    private func reloadFileContent(_ file: URL) {
+        guard let content = try? String(contentsOf: file, encoding: .utf8),
+              content != self.editor.string else { return }
+        let sel = self.editor.selectedRange()
+        self.isExternalReload = true
+        self.editor.string = content
+        self.editor.restyleMarkdown()
+        if sel.location <= (content as NSString).length { self.editor.setSelectedRange(sel) }
+        self.isExternalReload = false
     }
 
     func watchDirectory() {
