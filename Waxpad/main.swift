@@ -31,6 +31,18 @@ editMenuItem.submenu = {
     return m
 }()
 mainMenu.addItem(editMenuItem)
+
+let fileMenuItem = NSMenuItem()
+fileMenuItem.submenu = {
+    let m = NSMenu(title: "File")
+    let openItem = NSMenuItem(title: "Open...", action: #selector(NotesPanel.openFiles), keyEquivalent: "o")
+    m.addItem(openItem)
+    let closeItem = NSMenuItem(title: "Close Tab", action: #selector(NotesPanel.closeCurrentTab), keyEquivalent: "w")
+    m.addItem(closeItem)
+    return m
+}()
+mainMenu.addItem(fileMenuItem)
+
 app.mainMenu = mainMenu
 app.run()
 
@@ -64,6 +76,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func togglePanel() {
         if panel.isVisible {
+            panel.saveCurrentNote()
             saveWindowFrame()
             panel.orderOut(nil)
         } else {
@@ -585,9 +598,8 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
     var notes: [URL] = []
     var tabButtons: [TabButton] = []
     private var saveTimer: Timer?
-    private var fileWatcher: DispatchSourceFileSystemObject?
+    private var fileWatchers: [URL: DispatchSourceFileSystemObject] = [:]
     private var isExternalReload = false
-    private var dirWatcher: DispatchSourceFileSystemObject?
     private var emptyStateView: NSView?
     private var editorScroll: NSScrollView?
     private var addBtnLabel: NSTextField?
@@ -623,8 +635,7 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
         hasShadow = true
         center()
         setupUI()
-        loadNotes()
-        watchDirectory()
+        restoreOpenTabs()
 
         for n in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
             NotificationCenter.default.addObserver(forName: n, object: self, queue: nil) { _ in
@@ -739,18 +750,18 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
 
-        let emoji = NSTextField(labelWithString: "📝")
+        let emoji = NSTextField(labelWithString: "\u{1F4DD}")
         emoji.font = NSFont.systemFont(ofSize: 32)
         emoji.alignment = .center
         emoji.translatesAutoresizingMaskIntoConstraints = false
 
-        let title = NSTextField(labelWithString: "No notes yet")
+        let title = NSTextField(labelWithString: "No notes open")
         title.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         title.textColor = NSColor(white: 1.0, alpha: 0.5)
         title.alignment = .center
         title.translatesAutoresizingMaskIntoConstraints = false
 
-        let subtitle = NSTextField(labelWithString: "Hit + to get started")
+        let subtitle = NSTextField(labelWithString: "Press + to create a note or \u{2318}O to open one")
         subtitle.font = NSFont.systemFont(ofSize: 11, weight: .regular)
         subtitle.textColor = NSColor(white: 1.0, alpha: 0.25)
         subtitle.alignment = .center
@@ -793,23 +804,56 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
         addBtnWrap?.layer?.borderWidth = 0
     }
 
-    // MARK: - Notes
+    // MARK: - Tab Persistence
 
-    func loadNotes() {
-        notes = (try? FileManager.default.contentsOfDirectory(at: notesDir, includingPropertiesForKeys: nil))?
-            .filter { $0.pathExtension == "md" }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
-        rebuildTabs()
+    func persistTabs() {
+        let paths = notes.map { $0.path }
+        UserDefaults.standard.set(paths, forKey: "openTabs")
+        if let active = currentFile {
+            UserDefaults.standard.set(active.path, forKey: "activeTabPath")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "activeTabPath")
+        }
+    }
+
+    func restoreOpenTabs() {
+        let fm = FileManager.default
+        let savedPaths = (UserDefaults.standard.stringArray(forKey: "openTabs") ?? [])
+            .filter { fm.fileExists(atPath: $0) }
+
+        // Persist cleaned list
+        UserDefaults.standard.set(savedPaths, forKey: "openTabs")
+
+        notes = savedPaths.map { URL(fileURLWithPath: $0) }
+        sortNotes()
+
         if notes.isEmpty {
             currentFile = nil
             editor.string = ""
             editor.isEditable = false
+            rebuildTabs()
             showEmptyState()
         } else {
             hideEmptyState()
             editor.isEditable = true
-            if currentFile == nil { selectNote(at: 0) }
+            rebuildTabs()
+            startWatchingAllFiles()
+
+            // Restore active tab
+            let activePath = UserDefaults.standard.string(forKey: "activeTabPath") ?? ""
+            let activeURL = URL(fileURLWithPath: activePath)
+            if let idx = notes.firstIndex(of: activeURL) {
+                selectNote(at: idx)
+            } else {
+                selectNote(at: 0)
+            }
         }
+    }
+
+    // MARK: - Notes
+
+    func sortNotes() {
+        notes.sort { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
     }
 
     func rebuildTabs() {
@@ -823,6 +867,8 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
             let menu = NSMenu()
             let del = NSMenuItem(title: "Delete Note", action: #selector(deleteNote(_:)), keyEquivalent: "")
             del.representedObject = url; del.target = self; menu.addItem(del)
+            let close = NSMenuItem(title: "Close Tab", action: #selector(closeTabFromMenu(_:)), keyEquivalent: "")
+            close.representedObject = url; close.target = self; menu.addItem(close)
             tab.menu = menu
             tabStack.addArrangedSubview(tab)
             tabButtons.append(tab)
@@ -843,7 +889,7 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
         editor.string = (try? String(contentsOf: notes[index], encoding: .utf8)) ?? ""
         editor.restyleMarkdown()
         highlightActiveTab()
-        watchFile(notes[index])
+        persistTabs()
     }
 
     func switchTab(delta: Int) {
@@ -888,13 +934,23 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
 
         if newURL != url && !FileManager.default.fileExists(atPath: newURL.path) {
             saveCurrentNote()
+            // Stop watching the old file
+            stopWatchingFile(url)
             try? FileManager.default.moveItem(at: url, to: newURL)
-        }
-
-        let wasSelected = (currentFile == url)
-        loadNotes()
-        if wasSelected, let idx = notes.firstIndex(of: FileManager.default.fileExists(atPath: newURL.path) ? newURL : url) {
-            selectNote(at: idx)
+            // Update the path in the open tabs list
+            if let idx = notes.firstIndex(of: url) {
+                notes[idx] = newURL
+            }
+            // Start watching the new file
+            startWatchingFile(newURL)
+            // Update active file reference
+            if currentFile == url { currentFile = newURL }
+            rebuildTabs()
+            persistTabs()
+            // Re-select to refresh editor state
+            if let idx = notes.firstIndex(of: newURL) {
+                selectNote(at: idx)
+            }
         }
     }
 
@@ -905,7 +961,14 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
             file = notesDir.appendingPathComponent("New Note \(c).md"); c += 1
         }
         try? "".write(to: file, atomically: true, encoding: .utf8)
-        loadNotes()
+
+        hideEmptyState()
+        editor.isEditable = true
+        notes.append(file)
+        sortNotes()
+        rebuildTabs()
+        startWatchingFile(file)
+        persistTabs()
         if let idx = notes.firstIndex(of: file) { selectNote(at: idx); makeFirstResponder(editor) }
     }
 
@@ -919,41 +982,132 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
         alert.alertStyle = .warning
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         try? FileManager.default.removeItem(at: url)
-        if currentFile == url { currentFile = nil; editor.string = "" }
-        loadNotes()
+        removeTab(for: url)
     }
 
-    func watchFile(_ url: URL) {
-        fileWatcher?.cancel()
+    @objc func closeTabFromMenu(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        saveCurrentNote()
+        removeTab(for: url)
+    }
+
+    @objc func closeCurrentTab() {
+        guard let file = currentFile else { return }
+        saveCurrentNote()
+        removeTab(for: file)
+    }
+
+    @objc func openFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.init(filenameExtension: "md")!]
+
+        guard panel.runModal() == .OK else { return }
+
+        var lastNew: URL?
+        for url in panel.urls {
+            // Skip files already open (exact path match)
+            if notes.contains(url) {
+                lastNew = url
+                continue
+            }
+            notes.append(url)
+            startWatchingFile(url)
+            lastNew = url
+        }
+
+        if !notes.isEmpty {
+            hideEmptyState()
+            editor.isEditable = true
+        }
+
+        sortNotes()
+        rebuildTabs()
+        persistTabs()
+
+        if let target = lastNew, let idx = notes.firstIndex(of: target) {
+            selectNote(at: idx)
+        }
+    }
+
+    /// Remove a tab for a given URL (does NOT delete the file from disk)
+    private func removeTab(for url: URL) {
+        guard let idx = notes.firstIndex(of: url) else { return }
+        let wasActive = (currentFile == url)
+
+        stopWatchingFile(url)
+        notes.remove(at: idx)
+        rebuildTabs()
+
+        if notes.isEmpty {
+            currentFile = nil
+            editor.string = ""
+            editor.isEditable = false
+            showEmptyState()
+        } else if wasActive {
+            // Activate tab to the right; if rightmost, activate left
+            let nextIdx = idx < notes.count ? idx : notes.count - 1
+            selectNote(at: nextIdx)
+        }
+        persistTabs()
+    }
+
+    // MARK: - Per-File Watching
+
+    func startWatchingAllFiles() {
+        for url in notes {
+            startWatchingFile(url)
+        }
+    }
+
+    func startWatchingFile(_ url: URL) {
+        // Don't double-watch
+        if fileWatchers[url] != nil { return }
+
         let fd = open(url.path, O_EVTONLY)
         guard fd >= 0 else { return }
-        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .delete, .rename, .attrib], queue: .main)
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .delete, .rename, .attrib],
+            queue: .main
+        )
         source.setEventHandler { [weak self] in
-            guard let self, let file = self.currentFile else { return }
+            guard let self else { return }
             let flags = source.data
             let replaced = flags.contains(.delete) || flags.contains(.rename)
-            // File was deleted or renamed externally — swap to another note
-            if !FileManager.default.fileExists(atPath: file.path) {
-                self.fileWatcher?.cancel()
-                self.currentFile = nil
-                self.loadNotes()
-                if !self.notes.isEmpty { self.selectNote(at: 0) }
-                else { self.editor.string = "" }
+
+            // File was deleted externally — remove its tab
+            if !FileManager.default.fileExists(atPath: url.path) {
+                self.removeTab(for: url)
                 return
             }
-            // Atomic save (editor wrote temp file then renamed over original):
-            // the old fd is stale — reload content and re-watch the new inode
+
+            // Atomic save (temp file renamed over original): re-watch the new inode
             if replaced {
-                self.reloadFileContent(file)
-                self.watchFile(file)
+                if url == self.currentFile {
+                    self.reloadFileContent(url)
+                }
+                // Re-watch since the inode changed
+                self.stopWatchingFile(url)
+                self.startWatchingFile(url)
                 return
             }
-            // File was modified externally (in-place write)
-            self.reloadFileContent(file)
+
+            // File was modified externally (in-place write) — reload if active
+            if url == self.currentFile {
+                self.reloadFileContent(url)
+            }
         }
         source.setCancelHandler { Darwin.close(fd) }
         source.resume()
-        fileWatcher = source
+        fileWatchers[url] = source
+    }
+
+    func stopWatchingFile(_ url: URL) {
+        fileWatchers[url]?.cancel()
+        fileWatchers.removeValue(forKey: url)
     }
 
     private func reloadFileContent(_ file: URL) {
@@ -965,24 +1119,6 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
         self.editor.restyleMarkdown()
         if sel.location <= (content as NSString).length { self.editor.setSelectedRange(sel) }
         self.isExternalReload = false
-    }
-
-    func watchDirectory() {
-        dirWatcher?.cancel()
-        let fd = open(notesDir.path, O_EVTONLY)
-        guard fd >= 0 else { return }
-        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write], queue: .main)
-        source.setEventHandler { [weak self] in
-            guard let self else { return }
-            let prev = Set(self.notes.map(\.lastPathComponent))
-            let current = Set(((try? FileManager.default.contentsOfDirectory(at: notesDir, includingPropertiesForKeys: nil))?
-                .filter { $0.pathExtension == "md" }
-                .map(\.lastPathComponent)) ?? [])
-            if prev != current { self.loadNotes() }
-        }
-        source.setCancelHandler { Darwin.close(fd) }
-        source.resume()
-        dirWatcher = source
     }
 
     // MARK: - NSTextViewDelegate
