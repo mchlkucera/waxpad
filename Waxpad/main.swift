@@ -600,7 +600,7 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
     private var saveTimer: Timer?
     private var fileWatchers: [URL: DispatchSourceFileSystemObject] = [:]
     private var isExternalReload = false
-    private var isSelfSaving = false
+    private var lastSaveTime: Date = .distantPast
     private var emptyStateView: NSView?
     private var editorScroll: NSScrollView?
     private var addBtnLabel: NSTextField?
@@ -901,10 +901,8 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
 
     func saveCurrentNote() {
         guard let f = currentFile, FileManager.default.fileExists(atPath: f.path) else { return }
-        isSelfSaving = true
+        lastSaveTime = Date()
         try? editor.string.write(to: f, atomically: true, encoding: .utf8)
-        // Delay clearing the flag so the watcher callback (dispatched on main queue) sees it
-        DispatchQueue.main.async { [weak self] in self?.isSelfSaving = false }
     }
 
     func scheduleSave() {
@@ -1074,7 +1072,7 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
         guard fd >= 0 else { return }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
-            eventMask: [.write, .delete, .rename, .attrib],
+            eventMask: [.write, .delete, .rename],
             queue: .main
         )
         source.setEventHandler { [weak self] in
@@ -1090,7 +1088,7 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
 
             // Atomic save (temp file renamed over original): re-watch the new inode
             if replaced {
-                if url == self.currentFile && !self.isSelfSaving {
+                if url == self.currentFile && Date().timeIntervalSince(self.lastSaveTime) > 1.0 {
                     self.reloadFileContent(url)
                 }
                 // Re-watch since the inode changed
@@ -1100,7 +1098,7 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
             }
 
             // File was modified externally (in-place write) — reload if active
-            if url == self.currentFile && !self.isSelfSaving {
+            if url == self.currentFile && Date().timeIntervalSince(self.lastSaveTime) > 1.0 {
                 self.reloadFileContent(url)
             }
         }
