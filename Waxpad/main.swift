@@ -35,6 +35,8 @@ mainMenu.addItem(editMenuItem)
 let fileMenuItem = NSMenuItem()
 fileMenuItem.submenu = {
     let m = NSMenu(title: "File")
+    let newItem = NSMenuItem(title: "New File...", action: #selector(NotesPanel.createNewFile), keyEquivalent: "n")
+    m.addItem(newItem)
     let openItem = NSMenuItem(title: "Open...", action: #selector(NotesPanel.openFiles), keyEquivalent: "o")
     m.addItem(openItem)
     let closeItem = NSMenuItem(title: "Close Tab", action: #selector(NotesPanel.closeCurrentTab), keyEquivalent: "w")
@@ -972,6 +974,46 @@ class NotesPanel: NSPanel, NSTextViewDelegate {
         startWatchingFile(file)
         persistTabs()
         if let idx = notes.firstIndex(of: file) { selectNote(at: idx); makeFirstResponder(editor) }
+    }
+
+    @objc func createNewFile() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "md")!]
+        panel.nameFieldStringValue = "Untitled.md"
+        panel.canCreateDirectories = true
+
+        // Restore last used directory
+        if let lastDir = UserDefaults.standard.string(forKey: "WaxpadLastNewFileDir") {
+            let url = URL(fileURLWithPath: lastDir)
+            if FileManager.default.fileExists(atPath: url.path) {
+                panel.directoryURL = url
+            }
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        // Remember directory for next time
+        UserDefaults.standard.set(url.deletingLastPathComponent().path, forKey: "WaxpadLastNewFileDir")
+
+        // Create the file if it doesn't exist
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? "".write(to: url, atomically: true, encoding: .utf8)
+        }
+
+        // Open in Waxpad (skip if already open)
+        if !notes.contains(url) {
+            notes.append(url)
+            startWatchingFile(url)
+        }
+        hideEmptyState()
+        editor.isEditable = true
+        sortNotes()
+        rebuildTabs()
+        persistTabs()
+        if let idx = notes.firstIndex(of: url) {
+            selectNote(at: idx)
+            makeFirstResponder(editor)
+        }
     }
 
     @objc func deleteNote(_ sender: NSMenuItem) {
